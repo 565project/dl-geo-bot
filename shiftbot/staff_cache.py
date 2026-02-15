@@ -19,3 +19,6 @@ class StaffCache:
 
     def set(self, telegram_user_id: int, staff: Optional[dict]) -> None:
         self._cache[telegram_user_id] = (time.time(), staff)
+
+    def invalidate(self, telegram_user_id: int) -> None:
+        self._cache.pop(telegram_user_id, None)
