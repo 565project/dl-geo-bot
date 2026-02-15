@@ -46,6 +46,27 @@ class OpenCartClient:
         staff = payload.get("staff") if isinstance(payload, dict) else None
         return staff if isinstance(staff, dict) else None
 
+    async def get_points(self) -> list[dict]:
+        self._require_config()
+        url = f"{self.base_url}?route=dl/geo_api/points&key={self.api_key}"
+        payload = await self._request("GET", url)
+        points = payload.get("points")
+        if not isinstance(points, list):
+            return []
+        return [point for point in points if isinstance(point, dict)]
+
+    async def shift_start(self, payload: dict) -> dict:
+        self._require_config()
+        url = f"{self.base_url}?route=dl/geo_api/shift_start&key={self.api_key}"
+        data = await self._request("POST", url, json=payload)
+        return data if isinstance(data, dict) else {"ok": False, "error": "Некорректный ответ API"}
+
+    async def shift_end(self, payload: dict) -> dict:
+        self._require_config()
+        url = f"{self.base_url}?route=dl/geo_api/shift_end&key={self.api_key}"
+        data = await self._request("POST", url, json=payload)
+        return data if isinstance(data, dict) else {"ok": False, "error": "Некорректный ответ API"}
+
     async def rebind_telegram(
         self,
         staff_id: int,

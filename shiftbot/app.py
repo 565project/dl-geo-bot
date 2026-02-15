@@ -1,4 +1,4 @@
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.ext import Application
 
 from shiftbot import config
@@ -25,16 +25,27 @@ class ShiftBotApp:
         if not config.OC_API_BASE or not config.OC_API_KEY:
             raise RuntimeError("OC_API_BASE и OC_API_KEY обязательны.")
 
-        self.application = Application.builder().token(config.BOT_TOKEN).build()
+        self.application = Application.builder().token(config.BOT_TOKEN).post_init(self._post_init).build()
+
+    async def _post_init(self, app: Application) -> None:
+        commands = [
+            BotCommand("start", "Запустить бота и открыть меню"),
+            BotCommand("status", "Показать статус смены"),
+            BotCommand("restart", "Сбросить сценарий"),
+            BotCommand("start_shift", "Начать смену"),
+            BotCommand("stop_shift", "Завершить смену"),
+            BotCommand("help", "Краткая инструкция"),
+        ]
+        await app.bot.set_my_commands(commands)
 
     def register_handlers(self, app: Application) -> None:
         app.add_handler(build_registration_handler(self.staff_service, self.oc_client, self.logger))
         app.add_handler(build_cancel_handler())
 
-        for handler in build_shift_handlers(self.session_store, self.staff_service, self.logger):
+        for handler in build_shift_handlers(self.session_store, self.staff_service, self.oc_client, self.logger):
             app.add_handler(handler)
 
-        for handler in build_location_handlers(self.session_store, self.staff_service, self.logger):
+        for handler in build_location_handlers(self.session_store, self.staff_service, self.oc_client, self.logger):
             app.add_handler(handler)
 
         if config.ENABLE_STALE_CHECK:

@@ -18,6 +18,7 @@ from telegram.ext import (
 )
 
 from shiftbot.guards import inactive_staff_text
+from shiftbot.handlers_shift import show_main_menu
 
 REG_CONTACT, REG_CONFIRM, REG_NAME, REG_TYPE = range(4)
 
@@ -31,10 +32,6 @@ def normalize_ru_phone(raw: str) -> Optional[str]:
         return None
 
     return f"+{digits}"
-
-
-def active_menu_text() -> str:
-    return "Команды: /start_shift /stop_shift /status"
 
 
 def contact_keyboard() -> ReplyKeyboardMarkup:
@@ -63,10 +60,7 @@ def build_registration_handler(staff_service, oc_client, logger) -> Conversation
                 await update.message.reply_text(inactive_staff_text(staff))
                 return ConversationHandler.END
 
-            await update.message.reply_text(
-                "Вы уже зарегистрированы ✅\n" + active_menu_text(),
-                reply_markup=ReplyKeyboardRemove(),
-            )
+            await show_main_menu(update, context, "Вы уже зарегистрированы ✅")
             return ConversationHandler.END
 
         logger.info("REG_START user=%s", user.id)
@@ -129,10 +123,7 @@ def build_registration_handler(staff_service, oc_client, logger) -> Conversation
             return ConversationHandler.END
 
         if str(found_staff.get("telegram_user_id") or "") == str(user.id):
-            await update.message.reply_text(
-                "Вы уже зарегистрированы ✅\n" + active_menu_text(),
-                reply_markup=ReplyKeyboardRemove(),
-            )
+            await show_main_menu(update, context, "Вы уже зарегистрированы ✅")
             context.user_data.pop("reg", None)
             return ConversationHandler.END
 
@@ -231,17 +222,11 @@ def build_registration_handler(staff_service, oc_client, logger) -> Conversation
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("NEW_DEVICE_NOTIFY_FAIL chat_id=%s error=%s", prev_chat_id_int, exc)
 
-            await query.message.reply_text(
-                "Готово! Новое устройство привязано ✅\n"
-                "Теперь для вас доступен выбор смен!\n"
-                + active_menu_text()
-            )
+            await query.message.reply_text("Готово! Новое устройство привязано ✅")
+            await show_main_menu(update, context, "Теперь можно работать через кнопки меню.")
         else:
-            await query.message.reply_text(
-                "Готово! Вы авторизованы ✅\n"
-                "Теперь для вас доступен выбор смен!\n"
-                + active_menu_text()
-            )
+            await query.message.reply_text("Готово! Вы авторизованы ✅")
+            await show_main_menu(update, context, "Теперь можно работать через кнопки меню.")
 
         context.user_data.pop("reg", None)
         return ConversationHandler.END
@@ -306,11 +291,8 @@ def build_registration_handler(staff_service, oc_client, logger) -> Conversation
 
         if is_active == 1:
             logger.info("REG_DONE user=%s staff_id=%s", user.id, result.get("staff_id"))
-            await query.message.reply_text(
-                "Спасибо за регистрацию! ✅\n"
-                "Теперь для вас доступен выбор смен!\n"
-                + active_menu_text()
-            )
+            await query.message.reply_text("Спасибо за регистрацию! ✅")
+            await show_main_menu(update, context, "Теперь можно работать через кнопки меню.")
         else:
             logger.info("REG_DONE user=%s staff_id=%s inactive=1", user.id, result.get("staff_id"))
             await query.message.reply_text(inactive_staff_text(result))
