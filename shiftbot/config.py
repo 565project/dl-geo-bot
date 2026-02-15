@@ -12,7 +12,7 @@ OC_API_KEY = os.getenv("OC_API_KEY", OC_API_KEY_DEFAULT)
 POINT_LAT = float(os.getenv("POINT_LAT", "56.628495"))
 POINT_LON = float(os.getenv("POINT_LON", "47.894357"))
 
-RADIUS_M = int(os.getenv("RADIUS_M", "120"))
+DEFAULT_RADIUS_M = int(os.getenv("DEFAULT_RADIUS_M", os.getenv("RADIUS_M", "120")))
 ACCURACY_MAX_M = int(os.getenv("ACCURACY_MAX_M", "50"))
 
 OUT_STREAK_REQUIRED = int(os.getenv("OUT_STREAK_REQUIRED", "2"))
