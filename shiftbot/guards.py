@@ -2,6 +2,15 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 
+def inactive_staff_text(staff: dict) -> str:
+    status = (staff.get("status") or "").strip().lower()
+    if status == "blocked":
+        return "Аккаунт заблокирован. Обратитесь к администратору."
+    if status == "frozen":
+        return "Аккаунт заморожен. Обратитесь к администратору."
+    return "Аккаунт заблокирован/заморожен, обратитесь к администратору."
+
+
 class StaffService:
     def __init__(self, client, cache) -> None:
         self.client = client
@@ -15,6 +24,23 @@ class StaffService:
         staff = await self.client.get_staff(telegram_user_id)
         self.cache.set(telegram_user_id, staff)
         return staff
+
+    async def get_staff_by_phone(self, phone_raw: str):
+        return await self.client.get_staff_by_phone(phone_raw)
+
+    async def rebind_telegram(
+        self,
+        staff_id: int,
+        telegram_user_id: int,
+        telegram_chat_id: int,
+        mode: str,
+    ):
+        return await self.client.rebind_telegram(
+            staff_id=staff_id,
+            telegram_user_id=telegram_user_id,
+            telegram_chat_id=telegram_chat_id,
+            mode=mode,
+        )
 
 
 async def ensure_staff_active(
@@ -44,7 +70,7 @@ async def ensure_staff_active(
     if int(staff.get("is_active", 0)) == 0:
         logger.info("BLOCKED_ACCESS user=%s reason=inactive", user.id)
         if update.effective_message:
-            await update.effective_message.reply_text("Аккаунт заблокирован/заморожен, обратитесь к администратору.")
+            await update.effective_message.reply_text(inactive_staff_text(staff))
         return False
 
     return True
