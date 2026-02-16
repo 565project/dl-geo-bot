@@ -14,6 +14,17 @@ from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS
 
 
 def build_location_handlers(session_store, staff_service, oc_client, logger):
+    role_map = {
+        "cashier": "cashier",
+        "baker": "baker",
+        "both": "both",
+        "кассир": "cashier",
+        "повар": "baker",
+        "кассир+повар": "both",
+        "кассир/повар": "both",
+        "оба": "both",
+    }
+
     def selected_point(session) -> dict | None:
         if session.selected_point_index is None:
             return None
@@ -358,14 +369,31 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         )
         _geolog(f"[GEO_GATE] result=IN reason={in_reason}")
 
+        role_raw = str(session.selected_role).strip().lower()
+        role = role_map.get(role_raw)
+        if role not in {"cashier", "baker", "both"}:
+            logger.warning("SHIFT_START_ROLE_INVALID role=%r mapped=%r", session.selected_role, role)
+            await status_message.edit_text("Не удалось начать смену: некорректная роль. Выберите роль заново.")
+            return
+
         payload = {
             "staff_id": oc_staff_id,
             "point_id": session.selected_point_id,
-            "role": session.selected_role,
+            "role": role,
             "start_lat": lat,
             "start_lon": lon,
             "start_acc": float(accuracy) if accuracy is not None else None,
         }
+
+        logger.info(
+            "CALL shift_start staff_id=%s point_id=%s role=%s lat=%r lon=%r acc=%r",
+            payload["staff_id"],
+            payload["point_id"],
+            payload["role"],
+            payload["start_lat"],
+            payload["start_lon"],
+            payload["start_acc"],
+        )
 
         try:
             result = await oc_client.shift_start(payload)
@@ -373,12 +401,23 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
             await status_message.edit_text("Не удалось начать смену: временная ошибка API. Попробуйте ещё раз.")
             return
 
-        if result.get("ok") is False and result.get("error"):
-            if result.get("error") == "staff_not_found":
+        if not isinstance(result, dict):
+            await status_message.edit_text("Не удалось начать смену: некорректный ответ API.")
+            return
+
+        success = result.get("success")
+        if success is False:
+            error_json = result.get("json") if isinstance(result.get("json"), dict) else None
+            error_code = (error_json or {}).get("error") or "bad_request"
+            if error_code == "staff_not_found":
                 await status_message.edit_text(
                     "Не удалось начать смену: сотрудник не найден/не активен. Напишите администратору."
                 )
                 return
+            await status_message.edit_text(f"Не удалось начать смену: {error_code}")
+            return
+
+        if result.get("ok") is False and result.get("error"):
             await status_message.edit_text(f"Не удалось начать смену: {result['error']}")
             return
 
@@ -394,7 +433,7 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         session.active_point_lat = point_lat
         session.active_point_lon = point_lon
         session.active_point_radius = base_radius
-        session.active_role = session.selected_role
+        session.active_role = role
         session.active_started_at = datetime.now().strftime("%Y-%m-%d %H:%M")
         session.consecutive_out_count = 0
         session.out_streak = 0
