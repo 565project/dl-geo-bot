@@ -10,6 +10,7 @@ from shiftbot.geo import haversine_m
 from shiftbot.handlers_shift import active_shift_keyboard, main_menu_keyboard
 from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS_OUT, STATUS_UNKNOWN
 from shiftbot.opencart_client import ApiUnavailableError
+from shiftbot.ping_alerts import process_ping_alerts
 
 
 def build_location_handlers(session_store, staff_service, oc_client, dead_soul_detector, logger):
@@ -166,6 +167,14 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         except ApiUnavailableError:
             logger.warning("PING_ADD_UNAVAILABLE shift_id=%s staff_id=%s", session.active_shift_id, staff_id)
             return
+
+        await process_ping_alerts(
+            response=response,
+            context=context,
+            staff_chat_id=message.chat_id,
+            fallback_shift_id=session.active_shift_id,
+            logger=logger,
+        )
 
         status = str(response.get("status") or "").upper() or STATUS_UNKNOWN
         out_streak = as_int(response.get("out_streak")) or 0

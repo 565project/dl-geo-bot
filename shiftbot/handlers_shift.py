@@ -9,6 +9,7 @@ from shiftbot.guards import ensure_staff_active, get_staff_or_reply
 from shiftbot.live_registry import LIVE_REGISTRY
 from shiftbot.models import MODE_AWAITING_LOCATION, MODE_CHOOSE_POINT, MODE_CHOOSE_ROLE, MODE_IDLE, MODE_REPORT_ISSUE
 from shiftbot.opencart_client import ApiUnavailableError
+from shiftbot.ping_alerts import process_ping_alerts
 
 BTN_START_SHIFT = "🟢 Начать смену"
 BTN_STOP_SHIFT = "🔴 Завершить смену"
@@ -448,6 +449,14 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
                         chat_id=chat.id,
                         text=f"TEST ping_add status={meta.get('status')} body={meta.get('json') or meta.get('text')}",
                     )
+                    if isinstance(meta.get("json"), dict):
+                        await process_ping_alerts(
+                            response=meta["json"],
+                            context=context,
+                            staff_chat_id=chat.id,
+                            fallback_shift_id=shift_id,
+                            logger=logger,
+                        )
                 except ApiUnavailableError as exc:
                     logger.warning("TEST_PING_UNAVAILABLE shift_id=%s staff_id=%s error=%s", shift_id, staff_id, exc)
                 except Exception as exc:
