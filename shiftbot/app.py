@@ -52,7 +52,7 @@ class ShiftBotApp:
         ]
         await app.bot.set_my_commands(commands)
 
-        admin_chat_ids: list[int] = []
+        admin_chat_ids: list[int] = list(config.ADMIN_CHAT_IDS)
         for phone in config.ADMIN_PHONES:
             try:
                 staff = await self.oc_client.staff_by_phone(phone)
@@ -74,6 +74,9 @@ class ShiftBotApp:
                 self.logger.warning("ADMIN_CHAT_ID_MISSING phone=%s staff_id=%s", phone, staff.get("staff_id"))
                 continue
             admin_chat_ids.append(chat_id)
+
+        if config.ADMIN_CHAT_ID > 0:
+            admin_chat_ids.append(config.ADMIN_CHAT_ID)
 
         self.admin_chat_ids = sorted(set(admin_chat_ids))
         app.bot_data["admin_chat_ids"] = self.admin_chat_ids

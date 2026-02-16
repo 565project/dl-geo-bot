@@ -25,8 +25,24 @@ def _parse_admin_phones(raw: str) -> list[str]:
     return phones or ["89033262408"]
 
 
+def _parse_admin_chat_ids(raw: str) -> list[int]:
+    chat_ids: list[int] = []
+    for item in raw.split(","):
+        value = item.strip()
+        if not value:
+            continue
+        try:
+            chat_id = int(value)
+        except ValueError:
+            continue
+        if chat_id > 0:
+            chat_ids.append(chat_id)
+    return sorted(set(chat_ids))
+
+
 ADMIN_PHONE = os.getenv("ADMIN_PHONE", "89033262408")
 ADMIN_PHONES = _parse_admin_phones(os.getenv("ADMIN_PHONES", ADMIN_PHONE))
+ADMIN_CHAT_IDS = _parse_admin_chat_ids(os.getenv("ADMIN_CHAT_IDS", ""))
 DEAD_SOUL_STREAK = int(os.getenv("DEAD_SOUL_STREAK", "10"))
 DEAD_SOUL_BUCKET_SEC = int(os.getenv("DEAD_SOUL_BUCKET_SEC", "10"))
 DEAD_SOUL_WINDOW_SEC = int(os.getenv("DEAD_SOUL_WINDOW_SEC", "25"))
