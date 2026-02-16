@@ -11,7 +11,7 @@ from shiftbot.geo import haversine_m
 from shiftbot.live_registry import LIVE_REGISTRY
 from shiftbot import guards
 from shiftbot.guards import ensure_staff_active
-from shiftbot.handlers_shift import main_menu_keyboard
+from shiftbot.handlers_shift import active_shift_keyboard, main_menu_keyboard
 from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS_OUT
 from shiftbot.opencart_client import ApiUnavailableError
 
@@ -44,7 +44,7 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
 
     def retry_inline_keyboard(include_issue: bool = False) -> InlineKeyboardMarkup:
         rows = [
-            [InlineKeyboardButton("📍 Отправить геопозицию", callback_data="send_location")],
+            [InlineKeyboardButton("📍 Отправить ещё раз", callback_data="send_location")],
             [InlineKeyboardButton("🔁 Сменить точку", callback_data="change_point")],
         ]
         if include_issue:
@@ -340,7 +340,7 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
 
             if session.gate_attempt < config.GATE_MAX_ATTEMPTS:
                 await status_message.edit_text(
-                    "❌ Вы вне рабочей зоны: "
+                    "Мы не видим вас в рабочем радиусе: "
                     f"≈{dist_m:.0f} м, допустимо сейчас {effective_radius:.0f} м (попытка {session.gate_attempt}/{config.GATE_MAX_ATTEMPTS}).\n"
                     "Подойдите ближе к точке и отправьте локацию ещё раз.\n\n"
                     f"{details}",
@@ -349,8 +349,8 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
                 return
 
             await status_message.edit_text(
-                f"❌ Вы {config.GATE_MAX_ATTEMPTS} раз вне зоны. Проверьте, что выбрана правильная точка и отправляете трансляцию.\n"
-                "Нажмите 'Сменить точку' или 'Сообщить об ошибке'.\n\n"
+                f"Мы не видим вас в рабочем радиусе после нескольких попыток.\n"
+                "Проверьте точку и отправьте геопозицию ещё раз.\n\n"
                 f"{details}",
                 reply_markup=retry_inline_keyboard(include_issue=True),
             )
@@ -422,6 +422,18 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         if success is False:
             error_json = result.get("json") if isinstance(result.get("json"), dict) else None
             error_code = (error_json or {}).get("error") or "bad_request"
+            if result.get("status") == 409 and error_code == "shift_already_active":
+                shift_id = (error_json or {}).get("shift_id")
+                try:
+                    session.active_shift_id = int(shift_id) if shift_id is not None else None
+                except (TypeError, ValueError):
+                    session.active_shift_id = None
+                session.active_started_at = (error_json or {}).get("started_at") or session.active_started_at
+                await status_message.edit_text(
+                    f"У вас уже активная смена #{session.active_shift_id or '—'} (с {session.active_started_at or '—'}).",
+                    reply_markup=active_shift_keyboard(),
+                )
+                return
             if error_code == "staff_not_found":
                 await status_message.edit_text(
                     "Не удалось начать смену: сотрудник не найден/не активен. Напишите администратору."

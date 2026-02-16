@@ -26,17 +26,17 @@ class OpenCartClient:
         if not self.base_url or not self.api_key:
             raise RuntimeError("OC_API_BASE/OC_API_KEY не заданы.")
 
-    async def _request(
-        self,
-        method: str,
-        url: str,
-        *,
-        params: Optional[dict] = None,
-        data: Optional[dict] = None,
-        json: Optional[dict] = None,
-    ) -> dict:
+    async def _request(self, method: str, params: Optional[dict] = None, data: Optional[dict] = None) -> dict:
+        self._require_config()
+        url = self.base_url
+        if not url.endswith("/index.php"):
+            url = f"{url.rstrip('/')}/index.php"
+
+        all_params = dict(params or {})
+        all_params["key"] = self.api_key
+
         network_backoff = [0.3, 0.8, 1.8]
-        status_backoff = [0.3, 0.8]
+        status_backoff = [0.3]
         network_errors = (
             httpx.ConnectTimeout,
             httpx.ReadTimeout,
@@ -46,23 +46,24 @@ class OpenCartClient:
 
         for attempt in range(1, len(network_backoff) + 2):
             self.logger.info(
-                "API_REQUEST attempt=%s method=%s url=%s params=%s has_data=%s has_json=%s",
+                "API_REQUEST attempt=%s method=%s params=%s has_data=%s",
                 attempt,
                 method,
-                url,
-                params,
+                all_params,
                 data is not None,
-                json is not None,
             )
             try:
-                response = await self._client.request(method, url, params=params, data=data, json=json)
+                if method.upper() == "POST":
+                    response = await self._client.request(method, url, params=all_params, data=data)
+                else:
+                    response = await self._client.request(method, url, params=all_params)
             except network_errors as exc:
                 self.logger.warning(
-                    "API_REQUEST_EXCEPTION attempt=%s method=%s url=%s error_type=%s error=%s",
+                    "API_REQUEST_EXCEPTION attempt=%s method=%s error_type=%s attempt_no=%s error=%s",
                     attempt,
                     method,
-                    url,
                     type(exc).__name__,
+                    attempt,
                     exc,
                 )
                 if attempt <= len(network_backoff):
@@ -70,7 +71,14 @@ class OpenCartClient:
                     continue
                 raise ApiUnavailableError("temporary_api_error") from exc
             except httpx.HTTPError as exc:
-                self.logger.exception("API_ERROR method=%s url=%s error=%s", method, url, exc)
+                self.logger.warning(
+                    "API_REQUEST_EXCEPTION attempt=%s method=%s error_type=%s attempt_no=%s error=%s",
+                    attempt,
+                    method,
+                    type(exc).__name__,
+                    attempt,
+                    exc,
+                )
                 raise ApiUnavailableError("temporary_api_error") from exc
 
             if response.status_code in {502, 503, 504}:
@@ -114,46 +122,37 @@ class OpenCartClient:
         raise ApiUnavailableError("temporary_api_error")
 
     async def get_staff(self, telegram_user_id: int) -> Optional[dict]:
-        self._require_config()
-        url = f"{self.base_url}"
         payload = await self._request(
             "GET",
-            url,
             params={
                 "route": "dl/geo_api/staff_by_telegram",
-                "key": self.api_key,
                 "telegram_user_id": telegram_user_id,
             },
         )
         staff = payload.get("staff") if isinstance(payload, dict) else None
         return staff if isinstance(staff, dict) else None
 
+    async def get_staff_by_telegram(self, telegram_user_id: int) -> Optional[dict]:
+        return await self.get_staff(telegram_user_id)
+
     async def staff_by_phone(self, phone: str) -> Optional[dict]:
-        self._require_config()
-        url = f"{self.base_url}"
         payload = await self._request(
             "GET",
-            url,
-            params={"route": "dl/geo_api/staff_by_phone", "key": self.api_key, "phone": phone},
+            params={"route": "dl/geo_api/staff_by_phone", "phone": phone},
         )
         staff = payload.get("staff") if isinstance(payload, dict) else None
         return staff if isinstance(staff, dict) else None
 
     async def get_staff_by_phone(self, phone_raw: str) -> Optional[dict]:
-        self._require_config()
-        url = f"{self.base_url}"
         payload = await self._request(
             "GET",
-            url,
-            params={"route": "dl/geo_api/staff_by_phone", "key": self.api_key, "phone": phone_raw},
+            params={"route": "dl/geo_api/staff_by_phone", "phone": phone_raw},
         )
         staff = payload.get("staff") if isinstance(payload, dict) else None
         return staff if isinstance(staff, dict) else None
 
     async def get_points(self) -> list[dict]:
-        self._require_config()
-        url = f"{self.base_url}"
-        payload = await self._request("GET", url, params={"route": "dl/geo_api/points", "key": self.api_key})
+        payload = await self._request("GET", params={"route": "dl/geo_api/points"})
         points = payload.get("points")
         if not isinstance(points, list):
             return []
@@ -170,8 +169,6 @@ class OpenCartClient:
         return normalized_points
 
     async def shift_start(self, payload: dict) -> dict | None:
-        self._require_config()
-        url = f"{self.base_url}"
         clean_payload = {
             "staff_id": str(payload.get("staff_id")),
             "point_id": str(payload.get("point_id")),
@@ -187,21 +184,29 @@ class OpenCartClient:
 
         return await self._request(
             "POST",
-            url,
-            params={"route": "dl/geo_api/shift_start", "key": self.api_key},
+            params={"route": "dl/geo_api/shift_start"},
             data=clean_payload,
         )
 
     async def shift_end(self, payload: dict) -> dict:
-        self._require_config()
-        url = f"{self.base_url}"
+        clean_payload = {
+            "shift_id": str(payload.get("shift_id")),
+            "end_reason": str(payload.get("end_reason") or payload.get("reason") or "manual"),
+        }
         data = await self._request(
             "POST",
-            url,
-            params={"route": "dl/geo_api/shift_end", "key": self.api_key},
-            json=payload,
+            params={"route": "dl/geo_api/shift_end"},
+            data=clean_payload,
         )
         return data if isinstance(data, dict) else {"ok": False, "error": "Некорректный ответ API"}
+
+    async def get_active_shift_by_staff(self, staff_id: int) -> dict | None:
+        payload = await self._request(
+            "GET",
+            params={"route": "dl/geo_api/active_shift_by_staff", "staff_id": str(staff_id)},
+        )
+        shift = payload.get("shift") if isinstance(payload, dict) else None
+        return shift if isinstance(shift, dict) else None
 
     async def rebind_telegram(
         self,
@@ -210,8 +215,6 @@ class OpenCartClient:
         telegram_chat_id: int,
         mode: str,
     ) -> dict:
-        self._require_config()
-        url = f"{self.base_url}"
         payload = {
             "staff_id": staff_id,
             "telegram_user_id": str(telegram_user_id),
@@ -220,19 +223,15 @@ class OpenCartClient:
         }
         data = await self._request(
             "POST",
-            url,
-            params={"route": "dl/geo_api/rebind_telegram", "key": self.api_key},
-            json=payload,
+            params={"route": "dl/geo_api/rebind_telegram"},
+            data=payload,
         )
         return data if isinstance(data, dict) else {"ok": False, "error": "Некорректный ответ API"}
 
     async def register(self, payload: dict) -> dict:
-        self._require_config()
-        url = f"{self.base_url}"
         data = await self._request(
             "POST",
-            url,
-            params={"route": "dl/geo_api/register", "key": self.api_key},
-            json=payload,
+            params={"route": "dl/geo_api/register"},
+            data=payload,
         )
         return data if isinstance(data, dict) else {"error": "Некорректный ответ API"}
