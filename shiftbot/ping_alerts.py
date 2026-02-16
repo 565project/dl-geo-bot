@@ -65,13 +65,18 @@ def _alert_text(alert: dict) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _admin_chat_ids(context: ContextTypes.DEFAULT_TYPE) -> list[int]:
-    raw = context.application.bot_data.get("admin_chat_ids") if context and context.application else None
-    if isinstance(raw, list):
-        values = [int(chat_id) for chat_id in raw if isinstance(chat_id, int) and chat_id > 0]
-        if values:
-            return sorted(set(values))
-    return []
+
+
+def _admin_chat_ids_from_alert(alert: dict) -> list[int]:
+    raw = alert.get("admin_chat_ids") if isinstance(alert, dict) else None
+    if not isinstance(raw, list):
+        return []
+    values = []
+    for chat_id in raw:
+        value = _as_int(chat_id)
+        if isinstance(value, int) and value > 0:
+            values.append(value)
+    return sorted(set(values))
 
 
 async def process_ping_alerts(
@@ -88,8 +93,6 @@ async def process_ping_alerts(
 
     now = time.time()
     cooldowns = context.application.bot_data.setdefault(PING_ALERT_COOLDOWN_KEY, {})
-    admin_chat_ids = _admin_chat_ids(context)
-
     for raw_alert in alerts:
         if not isinstance(raw_alert, dict):
             continue
@@ -117,10 +120,10 @@ async def process_ping_alerts(
             cooldowns[cooldown_key] = now
 
         if admin_text:
+            admin_chat_ids = _admin_chat_ids_from_alert(raw_alert)
             if not admin_chat_ids:
-                logger.warning("ADMIN_CHAT_IDS_NOT_SET_FALLBACK_TO_STAFF shift_id=%s", shift_id)
-                await context.bot.send_message(chat_id=staff_chat_id, text=admin_text)
-            else:
-                for admin_chat_id in admin_chat_ids:
-                    await context.bot.send_message(chat_id=admin_chat_id, text=admin_text)
+                logger.error("ADMIN_CHAT_IDS_EMPTY_FOR_ALERT shift_id=%s alert_type=%s", shift_id, alert_type)
+                continue
+            for admin_chat_id in admin_chat_ids:
+                await context.bot.send_message(chat_id=admin_chat_id, text=admin_text)
             cooldowns[cooldown_key] = now

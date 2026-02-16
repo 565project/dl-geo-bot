@@ -50,6 +50,22 @@ class OpenCartClientPingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("ping_at", captured["body"])
         self.assertNotIn("timestamp", captured["body"])
 
+    async def test_violation_tick_handles_api_unavailable(self):
+        client = OpenCartClient("https://example.com", "secret", DummyLogger())
+        self.addAsyncCleanup(client.aclose)
+
+        async def fake_request(*args, **kwargs):
+            from shiftbot.opencart_client import ApiUnavailableError
+
+            raise ApiUnavailableError("temporary_api_error")
+
+        client._request = fake_request
+        response = await client.violation_tick(42)
+
+        self.assertEqual(response.get("ok"), False)
+        self.assertEqual(response.get("error"), "temporary_api_error")
+        self.assertEqual(response.get("decisions"), {})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,9 +4,10 @@ from telegram.ext import ContextTypes
 
 from shiftbot import config
 from shiftbot.models import STATUS_UNKNOWN
+from shiftbot.violation_alerts import maybe_send_admin_notify_from_decision
 
 
-def build_job_check_stale(session_store, logger):
+def build_job_check_stale(session_store, oc_client, logger):
     async def job_check_stale(context: ContextTypes.DEFAULT_TYPE) -> None:
         if session_store.is_empty():
             return
@@ -35,6 +36,26 @@ def build_job_check_stale(session_store, logger):
                         "Проверь, что трансляция геопозиции активна и Telegram имеет доступ к геолокации.\n\n"
                         "Если смена закончилась — /stop_shift."
                     ),
+                )
+
+                if not session.active_shift_id:
+                    logger.warning("STALE_TICK_SKIP_NO_SHIFT user=%s", session.user_id)
+                    continue
+
+                try:
+                    response = await oc_client.violation_tick(session.active_shift_id)
+                except Exception as exc:
+                    logger.error("VIOLATION_TICK_FAILED shift_id=%s error=%s", session.active_shift_id, exc)
+                    continue
+
+                await maybe_send_admin_notify_from_decision(
+                    context=context,
+                    response=response,
+                    shift_id=session.active_shift_id,
+                    logger=logger,
+                    staff_name=getattr(session, "active_staff_name", None),
+                    point_id=session.active_point_id,
+                    last_ping_ts=session.last_ping_ts,
                 )
 
     return job_check_stale

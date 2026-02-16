@@ -39,6 +39,7 @@ class ShiftSession:
     active_point_lon: Optional[float] = None
     active_point_radius: Optional[float] = None
     active_role: Optional[str] = None
+    active_staff_name: Optional[str] = None
     active_started_at: Optional[str] = None
     consecutive_out_count: int = 0
     last_out_warn_at: float = 0.0
