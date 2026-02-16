@@ -21,8 +21,12 @@ OUT_LIMIT = int(os.getenv("OUT_LIMIT", "3"))
 ADMIN_PHONE = os.getenv("ADMIN_PHONE", "89033262408")
 OUT_COOLDOWN_SEC = int(os.getenv("OUT_COOLDOWN_SEC", "300"))
 
-OUT_STREAK_REQUIRED = int(os.getenv("OUT_STREAK_REQUIRED", "2"))
-WARN_COOLDOWN_SEC = int(os.getenv("WARN_COOLDOWN_SEC", "120"))
+OUT_STREAK_ALERT = int(os.getenv("OUT_STREAK_ALERT", "3"))
+SAME_GPS_STREAK_ALERT = int(os.getenv("SAME_GPS_STREAK_ALERT", "20"))
+GPS_BUCKET_SEC = int(os.getenv("GPS_BUCKET_SEC", "30"))
+NOTIFY_COOLDOWN_SEC = int(os.getenv("NOTIFY_COOLDOWN_SEC", "60"))
+DEBUG_GPS_NOTIFY = os.getenv("DEBUG_GPS_NOTIFY", "0") in {"1", "true", "True"}
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 
 ENABLE_STALE_CHECK = os.getenv("ENABLE_STALE_CHECK", "1") not in {"0", "false", "False"}
 STALE_CHECK_EVERY_SEC = int(os.getenv("STALE_CHECK_EVERY_SEC", "30"))
