@@ -84,7 +84,7 @@ class OpenCartClientPingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response, {"ok": True})
         self.assertEqual(captured["query"]["route"], ["dl/geo_api/violation_tick"])
         self.assertEqual(captured["headers"].get("content-type"), "application/json")
-        self.assertEqual(captured["body"], '{"shift_id":"17"}')
+        self.assertEqual(captured["body"], '{"shift_id":17}')
 
 
 if __name__ == "__main__":

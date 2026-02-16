@@ -317,7 +317,7 @@ class OpenCartClient:
         return data if isinstance(data, dict) else {"error": "Некорректный ответ API"}
 
     async def violation_tick(self, shift_id: int) -> dict:
-        payload = {"shift_id": str(shift_id)}
+        payload = {"shift_id": int(shift_id)}
         payload_json = json.dumps(payload, ensure_ascii=False)
         request_headers = {"Content-Type": "application/json"}
         self.logger.info("VIOLATION_TICK_REQUEST payload=%s", payload)

@@ -38,6 +38,9 @@ async def maybe_send_admin_notify_from_decision(
     staff_name: str | None = None,
     point_id: int | None = None,
     last_ping_ts: float | None = None,
+    cooldown_reason: str | None = None,
+    cooldown_min_sec: int = 0,
+    text: str | None = None,
 ) -> bool:
     if not isinstance(response, dict) or not response.get("ok"):
         return False
@@ -55,22 +58,25 @@ async def maybe_send_admin_notify_from_decision(
 
     cooldowns = app.bot_data.setdefault(ADMIN_NOTIFY_COOLDOWN_KEY, {})
     now = time.time()
-    cooldown_key = (int(shift_id), reason)
+    cooldown_reason_value = str(cooldown_reason or reason)
+    cooldown_key = (int(shift_id), cooldown_reason_value)
     last_sent_at = cooldowns.get(cooldown_key)
-    if isinstance(last_sent_at, (int, float)) and (now - float(last_sent_at)) < config.ADMIN_NOTIFY_COOLDOWN_SEC:
+    cooldown_sec = max(int(config.ADMIN_NOTIFY_COOLDOWN_SEC), int(cooldown_min_sec or 0))
+    if isinstance(last_sent_at, (int, float)) and (now - float(last_sent_at)) < cooldown_sec:
         return False
 
     admin_chat_ids = _admin_chat_ids_from_response(response)
     if not admin_chat_ids:
         logger.error(
-            "ADMIN_NOTIFY_CHAT_IDS_EMPTY shift_id=%s reason=%s decisions=%s",
+            "ADMIN_NOTIFY_CHAT_IDS_EMPTY shift_id=%s reason=%s decisions=%s debug=%s",
             shift_id,
             reason,
             decisions,
+            response.get("debug") if isinstance(response, dict) else None,
         )
         return False
 
-    text = (
+    text_to_send = text or (
         "🚨 Нарушение по смене (server decision)\n"
         f"shift_id: {shift_id}\n"
         f"staff: {staff_name or '—'}\n"
@@ -81,13 +87,14 @@ async def maybe_send_admin_notify_from_decision(
     )
 
     for admin_chat_id in admin_chat_ids:
-        await context.bot.send_message(chat_id=admin_chat_id, text=text)
+        await context.bot.send_message(chat_id=admin_chat_id, text=text_to_send)
 
     cooldowns[cooldown_key] = now
     logger.info(
-        "ADMIN_NOTIFY_SENT shift_id=%s reason=%s round=%s chats=%s",
+        "ADMIN_NOTIFY_SENT shift_id=%s reason=%s cooldown_reason=%s round=%s chats=%s",
         shift_id,
         reason,
+        cooldown_reason_value,
         round_value,
         admin_chat_ids,
     )
