@@ -3,8 +3,8 @@ import time
 from telegram.ext import ContextTypes
 
 from shiftbot import config
+from shiftbot.config import ADMIN_FORCE_CHAT_IDS
 from shiftbot.models import STATUS_UNKNOWN
-from shiftbot.violation_alerts import maybe_send_admin_notify_from_decision
 
 ACTIVE_SHIFT_REFRESH_EVERY_SEC = 300
 
@@ -155,10 +155,8 @@ def build_job_check_stale(session_store, oc_client, logger):
                     logger.error("VIOLATION_TICK_FAILED shift_id=%s error=%s", session.active_shift_id, exc)
                     continue
 
-                decisions = response.get("decisions") if isinstance(response, dict) else None
-                if not isinstance(decisions, dict):
-                    decisions = {}
-                admin_chat_ids = response.get("admin_chat_ids") if isinstance(response, dict) else None
+                decisions = response.get("decisions", {}) if isinstance(response, dict) else {}
+                admin_chat_ids = response.get("admin_chat_ids", []) if isinstance(response, dict) else []
                 logger.info(
                     "VIOLATION_TICK_RESPONSE shift_id=%s response=%s",
                     session.active_shift_id,
@@ -189,29 +187,36 @@ def build_job_check_stale(session_store, oc_client, logger):
                         session.active_shift_id,
                     )
 
-                lag_sec = int(max(0, now - session.last_ping_ts)) if session.last_ping_ts > 0 else None
-                last_ping_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(session.last_ping_ts)) if session.last_ping_ts > 0 else "—"
-                admin_text = (
-                    "⚠️ Подозрение: сотрудник не виден (2-й раунд)\n\n"
-                    f"staff_id: {response.get('staff_id') if isinstance(response, dict) and response.get('staff_id') is not None else session.user_id}\n"
-                    f"shift_id: {session.active_shift_id}\n"
-                    f"point_id: {session.active_point_id if session.active_point_id is not None else '—'}\n\n"
-                    f"last_ping_at: {last_ping_at}\n"
-                    f"lag_sec: {lag_sec if lag_sec is not None else '—'}\n\n"
-                    "Инструкция: проверить сотрудника/связь/гео"
-                )
+                if decisions.get("admin_notify"):
+                    shift_id = session.active_shift_id
+                    staff_id = getattr(session, "staff_id", session.user_id)
+                    point_id = getattr(session, "point_id", session.active_point_id)
 
-                await maybe_send_admin_notify_from_decision(
-                    context=context,
-                    response=response,
-                    shift_id=session.active_shift_id,
-                    logger=logger,
-                    staff_name=getattr(session, "active_staff_name", None),
-                    point_id=session.active_point_id,
-                    last_ping_ts=session.last_ping_ts,
-                    cooldown_reason="vis_lost_admin",
-                    cooldown_min_sec=600,
-                    text=admin_text,
-                )
+                    # Берём IDs от сервера
+                    targets = admin_chat_ids or []
+
+                    # Если сервер никого не вернул — используем жёсткий fallback
+                    if not targets:
+                        targets = ADMIN_FORCE_CHAT_IDS
+
+                    logger.info(f"ADMIN_FORCE_NOTIFY shift_id={shift_id} targets={targets}")
+
+                    admin_text = (
+                        f"⚠️ ПОДОЗРЕНИЕ (2-й раунд)\n\n"
+                        f"Смена: {shift_id}\n"
+                        f"Сотрудник: {staff_id}\n"
+                        f"Точка: {point_id}\n\n"
+                        f"Сотрудник не виден (нет обновлений геолокации).\n"
+                        f"Требуется проверка."
+                    )
+
+                    for chat_id in targets:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=int(chat_id),
+                                text=admin_text
+                            )
+                        except Exception as e:
+                            logger.error(f"ADMIN_NOTIFY_FAILED chat_id={chat_id} error={e}")
 
     return job_check_stale
