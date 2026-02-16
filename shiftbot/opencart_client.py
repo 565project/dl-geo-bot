@@ -75,46 +75,53 @@ class OpenCartClient:
             normalized_points.append(item)
         return normalized_points
 
-    async def shift_start(self, payload: dict) -> dict:
+    async def shift_start(self, payload: dict) -> dict | None:
         self._require_config()
         url = f"{self.base_url}?route=dl/geo_api/shift_start&key={self.api_key}"
         clean_payload = {
-            "staff_id": payload.get("staff_id"),
-            "point_id": payload.get("point_id"),
-            "role": payload.get("role"),
-            "start_lat": payload.get("start_lat"),
-            "start_lon": payload.get("start_lon"),
+            "staff_id": str(payload.get("staff_id")),
+            "point_id": str(payload.get("point_id")),
+            "role": str(payload.get("role")),
+            "start_lat": str(payload.get("start_lat")),
+            "start_lon": str(payload.get("start_lon")),
         }
         if payload.get("start_acc") is not None:
-            clean_payload["start_acc"] = payload.get("start_acc")
+            clean_payload["start_acc"] = str(int(payload.get("start_acc")))
+
+        self.logger.info("SHIFT_START payload=%s", clean_payload)
+        print(f"SHIFT_START payload={clean_payload}", flush=True)
 
         try:
             async with httpx.AsyncClient(timeout=config.HTTP_TIMEOUT_SEC) as client:
-                response = await client.post(url, json=clean_payload)
+                response = await client.post(url, data=clean_payload, timeout=config.HTTP_TIMEOUT_SEC)
         except httpx.HTTPError as exc:
             self.logger.exception("API_ERROR method=POST url=%s error=%s", url, exc)
             raise RuntimeError("temporary_api_error") from exc
 
-        if response.status_code == 400:
-            try:
-                body = response.json()
-            except ValueError:
-                body = {}
-            error_code = body.get("error") if isinstance(body, dict) else None
-            self.logger.warning("SHIFT_START_400 error=%s", error_code or "unknown")
-            return {"ok": False, "error": error_code or "bad_request"}
-
-        if response.is_error:
-            self.logger.error("SHIFT_START_HTTP_ERROR status=%s body=%s", response.status_code, response.text)
-            raise RuntimeError("temporary_api_error")
-
         try:
             data = response.json()
-        except ValueError as exc:
-            self.logger.exception("SHIFT_START_BAD_JSON status=%s", response.status_code)
-            raise RuntimeError("temporary_api_error") from exc
+        except Exception:
+            data = None
 
-        return data if isinstance(data, dict) else {"ok": False, "error": "Некорректный ответ API"}
+        if response.status_code >= 400:
+            self.logger.warning(
+                "SHIFT_START_%s json=%s text=%s",
+                response.status_code,
+                data,
+                response.text[:400],
+            )
+            print(
+                f"SHIFT_START_{response.status_code} json={data} text={response.text[:400]}",
+                flush=True,
+            )
+            return {
+                "success": False,
+                "status": response.status_code,
+                "json": data,
+                "text": response.text,
+            }
+
+        return data
 
     async def shift_end(self, payload: dict) -> dict:
         self._require_config()
