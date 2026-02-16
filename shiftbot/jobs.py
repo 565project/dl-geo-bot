@@ -155,6 +155,22 @@ def build_job_check_stale(session_store, oc_client, logger):
                     logger.error("VIOLATION_TICK_FAILED shift_id=%s error=%s", session.active_shift_id, exc)
                     continue
 
+                decisions = response.get("decisions") if isinstance(response, dict) else None
+                if not isinstance(decisions, dict):
+                    decisions = {}
+                admin_chat_ids = response.get("admin_chat_ids") if isinstance(response, dict) else None
+                logger.info(
+                    "VIOLATION_TICK_RESPONSE shift_id=%s response=%s",
+                    session.active_shift_id,
+                    str(response)[:500],
+                )
+                logger.info(
+                    "VIOLATION_TICK_DECISIONS shift_id=%s decisions=%s admin_chat_ids=%s",
+                    session.active_shift_id,
+                    decisions,
+                    admin_chat_ids,
+                )
+
                 if isinstance(response, dict) and response.get("error") == "shift_not_active":
                     logger.warning(
                         "VIOLATION_TICK_SHIFT_NOT_ACTIVE user=%s shift_id=%s -> stop monitoring",
@@ -166,6 +182,25 @@ def build_job_check_stale(session_store, oc_client, logger):
                     if not session.active_shift_id:
                         continue
 
+                if decisions.get("staff_warn"):
+                    logger.info(
+                        "VIOLATION_TICK_STAFF_WARN_ALREADY_SENT user=%s shift_id=%s",
+                        session.user_id,
+                        session.active_shift_id,
+                    )
+
+                lag_sec = int(max(0, now - session.last_ping_ts)) if session.last_ping_ts > 0 else None
+                last_ping_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(session.last_ping_ts)) if session.last_ping_ts > 0 else "—"
+                admin_text = (
+                    "⚠️ Подозрение: сотрудник не виден (2-й раунд)\n\n"
+                    f"staff_id: {response.get('staff_id') if isinstance(response, dict) and response.get('staff_id') is not None else session.user_id}\n"
+                    f"shift_id: {session.active_shift_id}\n"
+                    f"point_id: {session.active_point_id if session.active_point_id is not None else '—'}\n\n"
+                    f"last_ping_at: {last_ping_at}\n"
+                    f"lag_sec: {lag_sec if lag_sec is not None else '—'}\n\n"
+                    "Инструкция: проверить сотрудника/связь/гео"
+                )
+
                 await maybe_send_admin_notify_from_decision(
                     context=context,
                     response=response,
@@ -174,6 +209,9 @@ def build_job_check_stale(session_store, oc_client, logger):
                     staff_name=getattr(session, "active_staff_name", None),
                     point_id=session.active_point_id,
                     last_ping_ts=session.last_ping_ts,
+                    cooldown_reason="vis_lost_admin",
+                    cooldown_min_sec=600,
+                    text=admin_text,
                 )
 
     return job_check_stale
