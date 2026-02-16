@@ -49,6 +49,8 @@ class ShiftSession:
 
     # legacy/runtime геополей для статуса и фоновых задач
     last_ping_ts: float = 0.0
+    last_live_update_ts: float = 0.0
+    last_active_shift_refresh_ts: float = 0.0
     last_notify_ts: float = 0.0
     last_valid_ping_ts: float = 0.0
     out_streak: int = 0

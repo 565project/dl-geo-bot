@@ -39,16 +39,28 @@ class DummySessionStore:
 
 
 class DummyOcClient:
-    def __init__(self, response=None, exc=None):
+    def __init__(self, response=None, exc=None, staff=None, active_shift=None):
         self.response = response
         self.exc = exc
+        self.staff = staff
+        self.active_shift = active_shift
         self.calls = []
+        self.staff_calls = []
+        self.active_shift_calls = []
 
     async def violation_tick(self, shift_id: int):
         self.calls.append(shift_id)
         if self.exc:
             raise self.exc
         return self.response
+
+    async def get_staff_by_telegram(self, user_id: int):
+        self.staff_calls.append(user_id)
+        return self.staff
+
+    async def get_active_shift_by_staff(self, staff_id: int):
+        self.active_shift_calls.append(staff_id)
+        return self.active_shift
 
 
 class StaleJobTests(unittest.IsolatedAsyncioTestCase):
@@ -67,7 +79,9 @@ class StaleJobTests(unittest.IsolatedAsyncioTestCase):
                 "reason": "VISIBILITY_LOST",
                 "round": 2,
                 "admin_chat_ids": [9001],
-            }
+            },
+            staff={"staff_id": 44},
+            active_shift={"shift_id": 555},
         )
 
         context = SimpleNamespace(
@@ -100,7 +114,7 @@ class StaleJobTests(unittest.IsolatedAsyncioTestCase):
         session.active_shift_id = 777
         session.last_ping_ts = now - (config.STALE_AFTER_SEC + 5)
 
-        oc_client = DummyOcClient(exc=RuntimeError("endpoint down"))
+        oc_client = DummyOcClient(exc=RuntimeError("endpoint down"), staff={"staff_id": 66}, active_shift={"shift_id": 777})
         context = SimpleNamespace(
             bot=DummyBot(),
             application=SimpleNamespace(bot_data={ADMIN_NOTIFY_COOLDOWN_KEY: {}}),
@@ -117,6 +131,36 @@ class StaleJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(oc_client.calls, [777])
         self.assertEqual(len(context.bot.messages), 1)
         self.assertEqual(context.bot.messages[0][0], 101)
+
+    async def test_shift_not_active_stops_monitoring_without_admin_notify(self):
+        now = time.time()
+        session = ShiftSession(user_id=3, chat_id=102, active=True)
+        session.active_shift_id = 15
+        session.last_ping_ts = now - (config.STALE_AFTER_SEC + 5)
+        session.last_active_shift_refresh_ts = now
+
+        oc_client = DummyOcClient(
+            response={"ok": False, "error": "shift_not_active", "shift_id": 15},
+            staff={"staff_id": 77},
+            active_shift=None,
+        )
+        context = SimpleNamespace(
+            bot=DummyBot(),
+            application=SimpleNamespace(bot_data={ADMIN_NOTIFY_COOLDOWN_KEY: {}}),
+        )
+        stale_job = build_job_check_stale(DummySessionStore([session]), oc_client, DummyLogger())
+
+        original_notify_cd = config.STALE_NOTIFY_COOLDOWN_SEC
+        config.STALE_NOTIFY_COOLDOWN_SEC = 0
+        try:
+            await stale_job(context)
+        finally:
+            config.STALE_NOTIFY_COOLDOWN_SEC = original_notify_cd
+
+        self.assertEqual(oc_client.calls, [15])
+        self.assertFalse(session.active)
+        self.assertIsNone(session.active_shift_id)
+        self.assertEqual(len(context.bot.messages), 1)
 
 
 if __name__ == "__main__":

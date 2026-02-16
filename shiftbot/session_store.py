@@ -53,6 +53,8 @@ class SessionStore:
         session.last_status = STATUS_IDLE
         session.last_notified_status = STATUS_IDLE
         session.last_ping_ts = 0.0
+        session.last_live_update_ts = 0.0
+        session.last_active_shift_refresh_ts = 0.0
         session.last_notify_ts = 0.0
         session.last_valid_ping_ts = 0.0
         session.last_lat = None
