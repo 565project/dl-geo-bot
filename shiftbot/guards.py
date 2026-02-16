@@ -49,28 +49,38 @@ async def ensure_staff_active(
     staff_service: StaffService,
     logger,
 ) -> bool:
+    staff = await get_staff_or_reply(update, context, staff_service, logger)
+    return staff is not None
+
+
+async def get_staff_or_reply(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    staff_service: StaffService,
+    logger,
+) -> dict | None:
     user = update.effective_user
     chat = update.effective_chat
     if not user or not chat:
-        return False
+        return None
 
     try:
         staff = await staff_service.get_staff(user.id)
     except RuntimeError:
         if update.effective_message:
             await update.effective_message.reply_text("Временная ошибка связи.")
-        return False
+        return None
 
     if staff is None:
         logger.info("BLOCKED_ACCESS user=%s reason=not_registered", user.id)
         if update.effective_message:
             await update.effective_message.reply_text("Сначала зарегистрируйся через /start")
-        return False
+        return None
 
     if int(staff.get("is_active", 0)) == 0:
         logger.info("BLOCKED_ACCESS user=%s reason=inactive", user.id)
         if update.effective_message:
             await update.effective_message.reply_text(inactive_staff_text(staff))
-        return False
+        return None
 
-    return True
+    return staff

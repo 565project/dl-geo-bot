@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes, MessageHandler, filters
 
 from shiftbot import config
 from shiftbot.geo import haversine_m
+from shiftbot import guards
 from shiftbot.guards import ensure_staff_active
 from shiftbot.handlers_shift import main_menu_keyboard
 from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS_OUT, STATUS_UNKNOWN
@@ -187,9 +188,22 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         point_lon_raw = as_float(session.selected_point_lon)
         base_radius = as_float(session.selected_point_radius) or float(config.DEFAULT_RADIUS_M)
         user_id = user.id
-        staff_id = session.user_id
         mode = session.mode
         acc_text = f"{accuracy:.0f}" if accuracy is not None else "неизвестна"
+
+        staff = await guards.get_staff_or_reply(update, context, staff_service, logger)
+        if not staff:
+            return
+
+        try:
+            oc_staff_id = int(staff["staff_id"])
+            tg_user_id = int(staff["telegram_user_id"])
+        except (KeyError, TypeError, ValueError):
+            logger.error("GEO_GATE_STAFF_IDS_INVALID staff=%s", staff)
+            await status_message.edit_text(
+                "Не удалось начать смену: сотрудник не найден/не активен. Напишите администратору."
+            )
+            return
 
         if point_lat_raw is None or point_lon_raw is None:
             state_snapshot = dict(vars(session))
@@ -222,7 +236,7 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         attempt_num = attempt + 1
 
         _geolog(
-            f"[GEO_GATE] user={user_id} staff_id={staff_id} "
+            f"[GEO_GATE] user={user_id} staff_id={oc_staff_id} tg_user_id={tg_user_id} "
             f"mode={mode} attempt={attempt_num}/{config.GATE_MAX_ATTEMPTS} "
             f"user=({lat:.7f},{lon:.7f}) "
             f"point=({point_lat:.7f},{point_lon:.7f}) "
@@ -233,7 +247,7 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         logger.info(
             "[GEO_GATE] staff_id=%s point_id=%s attempt=%s/%s user=(%.6f,%.6f) "
             "point_raw=(%.6f,%.6f) point_used=(%.6f,%.6f) dist_m=%.1f acc=%s acc_max=%s base_r=%.1f eff_radius=%.1f",
-            session.user_id,
+            oc_staff_id,
             session.selected_point_id,
             attempt + 1,
             config.GATE_MAX_ATTEMPTS,
@@ -326,12 +340,12 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         _geolog(f"[GEO_GATE] result=IN reason={in_reason}")
 
         payload = {
+            "staff_id": oc_staff_id,
             "point_id": session.selected_point_id,
             "role": session.selected_role,
-            "geo_lat": lat,
-            "geo_lon": lon,
-            "telegram_user_id": user.id,
-            "telegram_chat_id": chat.id,
+            "start_lat": lat,
+            "start_lon": lon,
+            "start_acc": float(accuracy) if accuracy is not None else None,
         }
 
         try:
@@ -341,6 +355,11 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
             return
 
         if result.get("ok") is False and result.get("error"):
+            if result.get("error") == "staff_not_found":
+                await status_message.edit_text(
+                    "Не удалось начать смену: сотрудник не найден/не активен. Напишите администратору."
+                )
+                return
             await status_message.edit_text(f"Не удалось начать смену: {result['error']}")
             return
 
