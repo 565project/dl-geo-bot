@@ -36,6 +36,16 @@ class OpenCartClient:
         staff = payload.get("staff") if isinstance(payload, dict) else None
         return staff if isinstance(staff, dict) else None
 
+    async def staff_by_phone(self, phone: str) -> Optional[dict]:
+        self._require_config()
+        url = (
+            f"{self.base_url}?route=dl/geo_api/staff_by_phone"
+            f"&key={self.api_key}&phone={phone}"
+        )
+        payload = await self._request("GET", url)
+        staff = payload.get("staff") if isinstance(payload, dict) else None
+        return staff if isinstance(staff, dict) else None
+
     async def get_staff_by_phone(self, phone_raw: str) -> Optional[dict]:
         self._require_config()
         url = (
