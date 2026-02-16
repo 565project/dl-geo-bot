@@ -23,6 +23,8 @@ class ShiftSession:
     points_cache: list[dict] = field(default_factory=list)
     selected_point_index: Optional[int] = None
     selected_role: Optional[str] = None
+    gate_attempt: int = 0
+    gate_last_reason: Optional[str] = None
 
     active_shift_id: Optional[int] = None
     active_point_id: Optional[int] = None

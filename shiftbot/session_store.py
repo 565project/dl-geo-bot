@@ -21,6 +21,8 @@ class SessionStore:
         session.points_cache = []
         session.selected_point_index = None
         session.selected_role = None
+        session.gate_attempt = 0
+        session.gate_last_reason = None
 
     def clear_shift_state(self, session: ShiftSession) -> None:
         session.active = False
@@ -44,6 +46,8 @@ class SessionStore:
         session.out_streak = 0
         session.last_warn_ts = 0.0
         session.last_stale_notify_ts = 0.0
+        session.gate_attempt = 0
+        session.gate_last_reason = None
 
     def values(self):
         return self._sessions.values()
