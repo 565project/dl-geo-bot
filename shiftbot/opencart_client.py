@@ -200,6 +200,31 @@ class OpenCartClient:
         )
         return data if isinstance(data, dict) else {"ok": False, "error": "Некорректный ответ API"}
 
+    async def ping_add(
+        self,
+        *,
+        shift_id: int,
+        staff_id: int,
+        lat: float,
+        lon: float,
+        acc: float | None = None,
+    ) -> dict:
+        payload = {
+            "shift_id": str(shift_id),
+            "staff_id": str(staff_id),
+            "lat": str(lat),
+            "lon": str(lon),
+        }
+        if acc is not None:
+            payload["acc"] = str(acc)
+
+        data = await self._request(
+            "POST",
+            params={"route": "dl/geo_api/ping_add"},
+            data=payload,
+        )
+        return data if isinstance(data, dict) else {"ok": False, "error": "Некорректный ответ API"}
+
     async def get_active_shift_by_staff(self, staff_id: int) -> dict | None:
         payload = await self._request(
             "GET",

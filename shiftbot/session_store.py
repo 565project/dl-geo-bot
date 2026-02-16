@@ -47,6 +47,8 @@ class SessionStore:
         session.consecutive_out_count = 0
         session.last_out_warn_at = 0.0
         session.last_admin_alert_at = 0.0
+        session.last_out_violation_notified_round = 0
+        session.last_unknown_warn_ts = 0.0
         session.last_status = STATUS_IDLE
         session.last_notified_status = STATUS_IDLE
         session.last_ping_ts = 0.0
