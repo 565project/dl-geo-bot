@@ -25,7 +25,13 @@ class ShiftBotApp:
         if not config.OC_API_BASE or not config.OC_API_KEY:
             raise RuntimeError("OC_API_BASE и OC_API_KEY обязательны.")
 
-        self.application = Application.builder().token(config.BOT_TOKEN).post_init(self._post_init).build()
+        self.application = (
+            Application.builder()
+            .token(config.BOT_TOKEN)
+            .post_init(self._post_init)
+            .post_shutdown(self._post_shutdown)
+            .build()
+        )
 
     async def _post_init(self, app: Application) -> None:
         commands = [
@@ -37,6 +43,9 @@ class ShiftBotApp:
             BotCommand("help", "Краткая инструкция"),
         ]
         await app.bot.set_my_commands(commands)
+
+    async def _post_shutdown(self, app: Application) -> None:
+        await self.oc_client.aclose()
 
     def register_handlers(self, app: Application) -> None:
         app.add_handler(build_registration_handler(self.staff_service, self.oc_client, self.logger))

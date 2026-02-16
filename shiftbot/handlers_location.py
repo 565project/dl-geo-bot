@@ -11,6 +11,7 @@ from shiftbot import guards
 from shiftbot.guards import ensure_staff_active
 from shiftbot.handlers_shift import main_menu_keyboard
 from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS_OUT
+from shiftbot.opencart_client import ApiUnavailableError
 
 
 def build_location_handlers(session_store, staff_service, oc_client, logger):
@@ -47,6 +48,9 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         if include_issue:
             rows.append([InlineKeyboardButton("🆘 Сообщить об ошибке", callback_data="report_issue")])
         return InlineKeyboardMarkup(rows)
+
+    def api_retry_keyboard() -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup([[InlineKeyboardButton("Повторить", callback_data="send_location")]])
 
     def out_alert_keyboard() -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
@@ -397,8 +401,11 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
 
         try:
             result = await oc_client.shift_start(payload)
-        except RuntimeError:
-            await status_message.edit_text("Не удалось начать смену: временная ошибка API. Попробуйте ещё раз.")
+        except ApiUnavailableError:
+            await status_message.edit_text(
+                "Сайт временно недоступен (ошибка сети). Попробуйте ещё раз через 10 секунд.",
+                reply_markup=api_retry_keyboard(),
+            )
             return
 
         if not isinstance(result, dict):
