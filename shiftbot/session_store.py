@@ -26,8 +26,15 @@ class SessionStore:
         session.active = False
         session.active_shift_id = None
         session.active_point_id = None
+        session.active_point_name = None
+        session.active_point_lat = None
+        session.active_point_lon = None
+        session.active_point_radius = None
         session.active_role = None
         session.active_started_at = None
+        session.consecutive_out_count = 0
+        session.last_out_warn_at = 0.0
+        session.last_admin_alert_at = 0.0
         session.last_status = STATUS_IDLE
         session.last_notified_status = STATUS_IDLE
         session.last_ping_ts = 0.0

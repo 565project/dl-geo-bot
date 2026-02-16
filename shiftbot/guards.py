@@ -26,7 +26,7 @@ class StaffService:
         return staff
 
     async def get_staff_by_phone(self, phone_raw: str):
-        return await self.client.get_staff_by_phone(phone_raw)
+        return await self.client.staff_by_phone(phone_raw)
 
     async def rebind_telegram(
         self,

@@ -13,7 +13,11 @@ POINT_LAT = float(os.getenv("POINT_LAT", "56.628495"))
 POINT_LON = float(os.getenv("POINT_LON", "47.894357"))
 
 DEFAULT_RADIUS_M = int(os.getenv("DEFAULT_RADIUS_M", os.getenv("RADIUS_M", "120")))
-ACCURACY_MAX_M = int(os.getenv("ACCURACY_MAX_M", "50"))
+ACCURACY_MAX_M = int(os.getenv("ACCURACY_MAX_M", "60"))
+
+OUT_LIMIT = int(os.getenv("OUT_LIMIT", "3"))
+ADMIN_PHONE = os.getenv("ADMIN_PHONE", "89033262408")
+OUT_COOLDOWN_SEC = int(os.getenv("OUT_COOLDOWN_SEC", "300"))
 
 OUT_STREAK_REQUIRED = int(os.getenv("OUT_STREAK_REQUIRED", "2"))
 WARN_COOLDOWN_SEC = int(os.getenv("WARN_COOLDOWN_SEC", "120"))

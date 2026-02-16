@@ -7,8 +7,9 @@ from telegram import (
 )
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
+from shiftbot import config
 from shiftbot.guards import ensure_staff_active
-from shiftbot.models import MODE_AWAITING_LOCATION, MODE_CHOOSE_POINT, MODE_CHOOSE_ROLE, MODE_IDLE
+from shiftbot.models import MODE_AWAITING_LOCATION, MODE_CHOOSE_POINT, MODE_CHOOSE_ROLE, MODE_IDLE, MODE_REPORT_ISSUE
 
 BTN_START_SHIFT = "✅ Начать смену"
 BTN_STOP_SHIFT = "🛑 Завершить смену"
@@ -83,6 +84,23 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
             "geo_lon": raw.get("geo_lon") or raw.get("geo_lng") or raw.get("geo_long"),
             "geo_radius_m": raw.get("geo_radius_m") or raw.get("radius") or raw.get("geo_radius"),
         }
+
+    async def get_admin_chat_id() -> int | None:
+        admin = await staff_service.get_staff_by_phone(config.ADMIN_PHONE)
+        if not admin:
+            return None
+        chat_id = admin.get("telegram_chat_id")
+        try:
+            return int(chat_id) if chat_id is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    async def start_report_issue_mode(msg, session) -> None:
+        session.mode = MODE_REPORT_ISSUE
+        await msg.reply_text(
+            "Опишите проблему одним сообщением — передадим администратору.",
+            reply_markup=main_menu_keyboard(),
+        )
 
     async def ask_points(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
@@ -176,7 +194,7 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
             return
 
         point = next((p for p in session.points_cache if p.get("id") == session.active_point_id), None)
-        point_name = point.get("short_name") if point else "—"
+        point_name = point.get("short_name") if point else (session.active_point_name or "—")
         started = session.active_started_at or "—"
         await msg.reply_text(
             "Смена активна:\n"
@@ -237,16 +255,34 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
             )
             return
         if text == BTN_REPORT_ERROR:
-            await msg.reply_text(
-                "Опишите проблему одним сообщением, мы передадим администратору. (позже подключим тикеты).",
-                reply_markup=main_menu_keyboard(),
-            )
+            await start_report_issue_mode(msg, session)
             return
         if text == BTN_HELP:
             await cmd_help(update, context)
             return
         if text == BTN_RESTART:
             await cmd_restart(update, context)
+            return
+
+        if session.mode == MODE_REPORT_ISSUE:
+            admin_chat_id = await get_admin_chat_id()
+            if admin_chat_id is None:
+                await msg.reply_text("Не удалось отправить сообщение администратору. Попробуйте позже.")
+                return
+
+            point_name = session.active_point_name or "—"
+            await context.bot.send_message(
+                chat_id=admin_chat_id,
+                text=(
+                    "🆘 Сообщение об ошибке от сотрудника\n"
+                    f"User ID: {user.id}\n"
+                    f"Точка: {point_name}\n"
+                    f"Shift ID: {session.active_shift_id or '—'}\n"
+                    f"Текст: {text}"
+                ),
+            )
+            session.mode = MODE_IDLE
+            await msg.reply_text("✅ Сообщение отправлено администратору.", reply_markup=main_menu_keyboard())
             return
 
         if session.mode == MODE_CHOOSE_POINT:
@@ -344,6 +380,11 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
                 "Нажмите кнопку ниже и отправьте геопозицию.",
                 reply_markup=location_keyboard(),
             )
+            return
+
+        if data == "report_issue":
+            await start_report_issue_mode(query.message, session)
+            return
 
     async def cmd_start_shift(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await start_shift_flow(update, context)
@@ -360,5 +401,5 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
         CommandHandler("help", cmd_help),
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text),
         CallbackQueryHandler(role_callback, pattern=r"^role:"),
-        CallbackQueryHandler(action_callback, pattern=r"^(change_point|send_location)$"),
+        CallbackQueryHandler(action_callback, pattern=r"^(change_point|send_location|report_issue)$"),
     ]
