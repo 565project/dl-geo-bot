@@ -41,6 +41,53 @@ class ShiftBotApp:
             .build()
         )
 
+    @staticmethod
+    def _normalize_admin_phone(phone_raw: str) -> str | None:
+        digits = "".join(ch for ch in str(phone_raw or "") if ch.isdigit())
+        if len(digits) == 10:
+            digits = f"7{digits}"
+        elif len(digits) == 11 and digits[0] in {"7", "8"}:
+            digits = f"7{digits[1:]}"
+        else:
+            return None
+        return f"+{digits}"
+
+    async def _load_admin_chat_ids(self) -> list[int]:
+        admin_chat_ids: list[int] = list(config.ADMIN_CHAT_IDS)
+        if config.ADMIN_CHAT_ID > 0:
+            admin_chat_ids.append(config.ADMIN_CHAT_ID)
+
+        for phone in config.ADMIN_PHONES:
+            normalized_phone = self._normalize_admin_phone(phone)
+            if not normalized_phone:
+                self.logger.warning("ADMIN_PHONE_INVALID_FORMAT phone=%s", phone)
+                continue
+
+            try:
+                staff = await self.oc_client.staff_by_phone(normalized_phone)
+            except Exception as exc:
+                self.logger.warning("ADMIN_PHONE_RESOLVE_FAILED phone=%s error=%s", normalized_phone, exc)
+                continue
+
+            if not isinstance(staff, dict):
+                self.logger.warning("admin phone not linked to telegram yet")
+                continue
+
+            chat_id_raw = staff.get("telegram_chat_id")
+            try:
+                chat_id = int(chat_id_raw) if chat_id_raw is not None else 0
+            except (TypeError, ValueError):
+                chat_id = 0
+
+            if chat_id <= 0:
+                self.logger.warning("ADMIN_CHAT_ID_MISSING staff_id=%s", staff.get("staff_id"))
+                continue
+            admin_chat_ids.append(chat_id)
+
+        deduped = sorted(set(admin_chat_ids))
+        self.logger.info("ADMIN_CHAT_IDS_LOADED admin_chat_ids=%s", deduped)
+        return deduped
+
     async def _post_init(self, app: Application) -> None:
         commands = [
             BotCommand("start", "Запустить бота и открыть меню"),
@@ -52,35 +99,8 @@ class ShiftBotApp:
         ]
         await app.bot.set_my_commands(commands)
 
-        admin_chat_ids: list[int] = list(config.ADMIN_CHAT_IDS)
-        for phone in config.ADMIN_PHONES:
-            try:
-                staff = await self.oc_client.staff_by_phone(phone)
-            except Exception as exc:
-                self.logger.warning("ADMIN_PHONE_RESOLVE_FAILED phone=%s error=%s", phone, exc)
-                continue
-
-            if not isinstance(staff, dict):
-                self.logger.warning("ADMIN_PHONE_NOT_FOUND phone=%s", phone)
-                continue
-
-            chat_id_raw = staff.get("telegram_chat_id")
-            try:
-                chat_id = int(chat_id_raw) if chat_id_raw is not None else 0
-            except (TypeError, ValueError):
-                chat_id = 0
-
-            if chat_id <= 0:
-                self.logger.warning("ADMIN_CHAT_ID_MISSING phone=%s staff_id=%s", phone, staff.get("staff_id"))
-                continue
-            admin_chat_ids.append(chat_id)
-
-        if config.ADMIN_CHAT_ID > 0:
-            admin_chat_ids.append(config.ADMIN_CHAT_ID)
-
-        self.admin_chat_ids = sorted(set(admin_chat_ids))
+        self.admin_chat_ids = await self._load_admin_chat_ids()
         app.bot_data["admin_chat_ids"] = self.admin_chat_ids
-        self.logger.info("ADMIN_CHAT_IDS_LOADED count=%s", len(self.admin_chat_ids))
 
     async def _post_shutdown(self, app: Application) -> None:
         await self.oc_client.aclose()
