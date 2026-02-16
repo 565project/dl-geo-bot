@@ -43,6 +43,7 @@ class SessionStore:
         session.active_point_lon = None
         session.active_point_radius = None
         session.active_role = None
+        session.active_staff_name = None
         session.active_started_at = None
         session.consecutive_out_count = 0
         session.last_out_warn_at = 0.0

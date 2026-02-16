@@ -11,6 +11,7 @@ from shiftbot.handlers_shift import active_shift_keyboard, main_menu_keyboard
 from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS_OUT, STATUS_UNKNOWN
 from shiftbot.opencart_client import ApiUnavailableError
 from shiftbot.ping_alerts import process_ping_alerts
+from shiftbot.violation_alerts import maybe_send_admin_notify_from_decision
 
 
 def build_location_handlers(session_store, staff_service, oc_client, dead_soul_detector, logger):
@@ -90,6 +91,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         session.active_point_lon = None
         session.active_point_radius = None
         session.active_role = None
+        session.active_staff_name = None
 
     def sync_session_from_shift(session, shift: dict) -> None:
         shift_id = shift.get("shift_id") or shift.get("id")
@@ -111,6 +113,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         session.active_point_lon = as_float(shift.get("point_lon") or shift.get("geo_lon") or shift.get("lon")) or session.active_point_lon
         session.active_point_radius = as_float(shift.get("point_radius") or shift.get("geo_radius_m") or shift.get("radius")) or session.active_point_radius
         session.active_role = role_map.get(str(shift.get("role") or "").lower(), session.active_role)
+        session.active_staff_name = shift.get("staff_name") or shift.get("full_name") or session.active_staff_name
 
     async def ensure_active_shift(session, staff_id: int) -> dict | None:
         shift = await oc_client.get_active_shift_by_staff(staff_id)
@@ -174,6 +177,16 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             staff_chat_id=message.chat_id,
             fallback_shift_id=session.active_shift_id,
             logger=logger,
+        )
+
+        await maybe_send_admin_notify_from_decision(
+            context=context,
+            response=response,
+            shift_id=session.active_shift_id,
+            logger=logger,
+            staff_name=session.active_staff_name,
+            point_id=session.active_point_id,
+            last_ping_ts=session.last_ping_ts,
         )
 
         status = str(response.get("status") or "").upper() or STATUS_UNKNOWN
@@ -286,6 +299,8 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         if not staff:
             logger.info("LOCATION_UPDATE staff_not_found tg=%s", user.id)
             return
+
+        session.active_staff_name = staff.get("full_name") or staff.get("name") or session.active_staff_name
 
         try:
             oc_staff_id = int(staff["staff_id"])
@@ -564,6 +579,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         session.active_point_lon = point_lon
         session.active_point_radius = base_radius
         session.active_role = role
+        session.active_staff_name = staff.get("full_name") or staff.get("name") or session.active_staff_name
         session.active_started_at = datetime.now().strftime("%Y-%m-%d %H:%M")
         session.consecutive_out_count = 0
         session.out_streak = 0

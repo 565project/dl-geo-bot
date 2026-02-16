@@ -11,6 +11,7 @@ from shiftbot.opencart_client import OpenCartClient
 from shiftbot.registration import build_cancel_handler, build_registration_handler
 from shiftbot.session_store import SessionStore
 from shiftbot.staff_cache import StaffCache
+from shiftbot.violation_alerts import ADMIN_NOTIFY_COOLDOWN_KEY
 
 
 class ShiftBotApp:
@@ -54,6 +55,10 @@ class ShiftBotApp:
 
     async def _load_admin_chat_ids(self) -> list[int]:
         admin_chat_ids: list[int] = []
+
+        admin_chat_ids.extend([chat_id for chat_id in config.ADMIN_CHAT_IDS if isinstance(chat_id, int) and chat_id > 0])
+        if config.ADMIN_CHAT_ID > 0:
+            admin_chat_ids.append(config.ADMIN_CHAT_ID)
 
         for phone in config.ADMIN_PHONES:
             normalized_phone = self._normalize_admin_phone(phone)
@@ -105,6 +110,7 @@ class ShiftBotApp:
 
         self.admin_chat_ids = await self._load_admin_chat_ids()
         app.bot_data["admin_chat_ids"] = self.admin_chat_ids
+        app.bot_data.setdefault(ADMIN_NOTIFY_COOLDOWN_KEY, {})
 
     async def _post_shutdown(self, app: Application) -> None:
         await self.oc_client.aclose()
@@ -138,7 +144,7 @@ class ShiftBotApp:
                     "python -m pip install \"python-telegram-bot[job-queue]\""
                 )
             app.job_queue.run_repeating(
-                build_job_check_stale(self.session_store, self.logger),
+                build_job_check_stale(self.session_store, self.oc_client, self.logger),
                 interval=config.STALE_CHECK_EVERY_SEC,
                 first=config.STALE_CHECK_EVERY_SEC,
             )

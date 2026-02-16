@@ -298,3 +298,16 @@ class OpenCartClient:
             data=payload,
         )
         return data if isinstance(data, dict) else {"error": "Некорректный ответ API"}
+
+    async def violation_tick(self, shift_id: int) -> dict:
+        payload = {"shift_id": str(shift_id)}
+        try:
+            data = await self._request(
+                "POST",
+                params={"route": "dl/geo_api/violation_tick"},
+                data=payload,
+            )
+        except ApiUnavailableError as exc:
+            self.logger.warning("VIOLATION_TICK_UNAVAILABLE shift_id=%s error=%s", shift_id, exc)
+            return {"ok": False, "error": "temporary_api_error", "decisions": {}}
+        return data if isinstance(data, dict) else {"ok": False, "error": "Некорректный ответ API", "decisions": {}}
