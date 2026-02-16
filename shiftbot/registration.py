@@ -291,8 +291,7 @@ def build_registration_handler(staff_service, oc_client, logger) -> Conversation
 
         if is_active == 1:
             logger.info("REG_DONE user=%s staff_id=%s", user.id, result.get("staff_id"))
-            await query.message.reply_text("Спасибо за регистрацию! ✅")
-            await show_main_menu(update, context, "Теперь можно работать через кнопки меню.")
+            await show_main_menu(update, context, "Спасибо за регистрацию! ✅ Выберите действие:")
         else:
             logger.info("REG_DONE user=%s staff_id=%s inactive=1", user.id, result.get("staff_id"))
             await query.message.reply_text(inactive_staff_text(result))
