@@ -22,6 +22,12 @@ class ShiftSession:
     mode: str = MODE_IDLE
     points_cache: list[dict] = field(default_factory=list)
     selected_point_index: Optional[int] = None
+    selected_point_id: Optional[int] = None
+    selected_point_name: Optional[str] = None
+    selected_point_address: Optional[str] = None
+    selected_point_lat: Optional[float] = None
+    selected_point_lon: Optional[float] = None
+    selected_point_radius: Optional[int] = None
     selected_role: Optional[str] = None
     gate_attempt: int = 0
     gate_last_reason: Optional[str] = None

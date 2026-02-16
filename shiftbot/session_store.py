@@ -20,9 +20,19 @@ class SessionStore:
         session.mode = MODE_IDLE
         session.points_cache = []
         session.selected_point_index = None
+        session.selected_point_id = None
+        session.selected_point_name = None
+        session.selected_point_address = None
+        session.selected_point_lat = None
+        session.selected_point_lon = None
+        session.selected_point_radius = None
         session.selected_role = None
         session.gate_attempt = 0
         session.gate_last_reason = None
+
+    def patch(self, session: ShiftSession, **changes) -> None:
+        for key, value in changes.items():
+            setattr(session, key, value)
 
     def clear_shift_state(self, session: ShiftSession) -> None:
         session.active = False

@@ -171,8 +171,7 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
                 pass
             print(msg, flush=True)
 
-        point = selected_point(session)
-        if point is None or session.selected_role is None:
+        if session.selected_role is None or session.selected_point_id is None:
             await update.message.reply_text("Сначала выберите точку и роль.", reply_markup=main_menu_keyboard())
             session_store.reset_flow(session)
             return
@@ -184,16 +183,18 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         accuracy = getattr(update.message.location, "horizontal_accuracy", None)
         session.last_accuracy_m = float(accuracy) if accuracy is not None else None
 
-        point_lat_raw = as_float(point.get("geo_lat"))
-        point_lon_raw = as_float(point.get("geo_lon"))
-        base_radius = as_float(point.get("geo_radius_m")) or float(config.DEFAULT_RADIUS_M)
+        point_lat_raw = as_float(session.selected_point_lat)
+        point_lon_raw = as_float(session.selected_point_lon)
+        base_radius = as_float(session.selected_point_radius) or float(config.DEFAULT_RADIUS_M)
         user_id = user.id
         staff_id = session.user_id
         mode = session.mode
         acc_text = f"{accuracy:.0f}" if accuracy is not None else "неизвестна"
 
         if point_lat_raw is None or point_lon_raw is None:
-            _geolog("[GEO_GATE] result=UNKNOWN reason=point_coords_missing")
+            state_snapshot = dict(vars(session))
+            logger.info("[GEO_GATE] missing point coords, state=%s", state_snapshot)
+            _geolog(f"[GEO_GATE] result=UNKNOWN reason=point_coords_missing state={state_snapshot}")
             await status_message.edit_text(
                 "Не удалось определить координаты точки. Выберите другую точку.\n"
                 f"Диагностика: dist≈—м, r={base_radius:.0f}м, acc={acc_text}"
@@ -233,7 +234,7 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
             "[GEO_GATE] staff_id=%s point_id=%s attempt=%s/%s user=(%.6f,%.6f) "
             "point_raw=(%.6f,%.6f) point_used=(%.6f,%.6f) dist_m=%.1f acc=%s acc_max=%s base_r=%.1f eff_radius=%.1f",
             session.user_id,
-            point.get("id"),
+            session.selected_point_id,
             attempt + 1,
             config.GATE_MAX_ATTEMPTS,
             lat,
@@ -325,7 +326,7 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         _geolog(f"[GEO_GATE] result=IN reason={in_reason}")
 
         payload = {
-            "point_id": point.get("id"),
+            "point_id": session.selected_point_id,
             "role": session.selected_role,
             "geo_lat": lat,
             "geo_lon": lon,
@@ -350,8 +351,8 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
             session.active_shift_id = None
 
         session.active = True
-        session.active_point_id = point.get("id")
-        session.active_point_name = point.get("short_name")
+        session.active_point_id = session.selected_point_id
+        session.active_point_name = session.selected_point_name
         session.active_point_lat = point_lat
         session.active_point_lon = point_lon
         session.active_point_radius = base_radius

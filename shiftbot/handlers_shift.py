@@ -85,6 +85,66 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
             "geo_radius_m": raw.get("geo_radius_m") or raw.get("radius") or raw.get("geo_radius"),
         }
 
+    def as_int(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    async def save_selected_point(msg, session, point_index: int) -> bool:
+        idx = point_index - 1
+        if idx < 0 or idx >= len(session.points_cache):
+            await msg.reply_text("Точка не найдена. Попробуйте выбрать другую.")
+            return False
+
+        point = session.points_cache[idx]
+        p_lat = point.get("geo_lat")
+        p_lon = point.get("geo_lon")
+        p_rad = point.get("geo_radius_m")
+
+        try:
+            if p_lat is not None:
+                p_lat = float(p_lat)
+            if p_lon is not None:
+                p_lon = float(p_lon)
+            if p_rad is not None:
+                p_rad = int(p_rad)
+        except (TypeError, ValueError):
+            p_lat = None
+            p_lon = None
+
+        if p_lat is None or p_lon is None:
+            await msg.reply_text("Для этой точки не задана геопозиция, выберите другую")
+            session_store.patch(
+                session,
+                selected_point_index=None,
+                selected_point_id=None,
+                selected_point_name=None,
+                selected_point_address=None,
+                selected_point_lat=None,
+                selected_point_lon=None,
+                selected_point_radius=None,
+            )
+            return False
+
+        session_store.patch(
+            session,
+            selected_point_index=point_index,
+            selected_point_id=as_int(point.get("id")),
+            selected_point_name=point.get("short_name") or point.get("name"),
+            selected_point_address=point.get("address"),
+            selected_point_lat=p_lat,
+            selected_point_lon=p_lon,
+            selected_point_radius=p_rad,
+            mode=MODE_CHOOSE_ROLE,
+        )
+        radius_text = f"{p_rad}м" if p_rad is not None else "не задан"
+        await msg.reply_text(
+            f"Выбрана точка: {session.selected_point_name or '—'}. "
+            f"Координаты: {p_lat}, {p_lon}. Радиус: {radius_text}"
+        )
+        return True
+
     async def get_admin_chat_id() -> int | None:
         admin = await staff_service.get_staff_by_phone(config.ADMIN_PHONE)
         if not admin:
@@ -121,12 +181,21 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
             await msg.reply_text("Сейчас нет доступных точек. Попробуйте позже.", reply_markup=main_menu_keyboard())
             return
 
-        session.points_cache = points
-        session.mode = MODE_CHOOSE_POINT
-        session.selected_point_index = None
-        session.selected_role = None
-        session.gate_attempt = 0
-        session.gate_last_reason = None
+        session_store.patch(
+            session,
+            points_cache=points,
+            mode=MODE_CHOOSE_POINT,
+            selected_point_index=None,
+            selected_point_id=None,
+            selected_point_name=None,
+            selected_point_address=None,
+            selected_point_lat=None,
+            selected_point_lon=None,
+            selected_point_radius=None,
+            selected_role=None,
+            gate_attempt=0,
+            gate_last_reason=None,
+        )
 
         lines = "\n".join(format_point_line(i + 1, point) for i, point in enumerate(points))
         await msg.reply_text(f"Адреса, доступные для работы:\n{lines}")
@@ -297,10 +366,10 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
                 await msg.reply_text(f"Номер вне диапазона. Введите число от 1 до {len(session.points_cache)}.")
                 return
 
-            session.selected_point_index = point_index
-            session.mode = MODE_CHOOSE_ROLE
-            point = selected_point(session)
-            title = point.get("short_name") if point else "Точка"
+            if not await save_selected_point(msg, session, point_index):
+                return
+
+            title = session.selected_point_name or "Точка"
 
             keyboard = InlineKeyboardMarkup(
                 [
@@ -334,21 +403,20 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
             await query.message.reply_text("Роль администратора появится позже. Выберите: кассир/повар/оба.")
             return
 
+        if session.selected_point_lat is None or session.selected_point_lon is None:
+            await query.message.reply_text("Для этой точки не задана геопозиция, выберите другую")
+            session.mode = MODE_CHOOSE_POINT
+            return
+
         session.selected_role = role
         session.gate_attempt = 0
         session.gate_last_reason = None
         session.mode = MODE_AWAITING_LOCATION
 
-        point = selected_point(session)
-        if point is None:
-            await query.message.reply_text("Точка не найдена. Нажмите «✅ Начать смену» ещё раз.", reply_markup=main_menu_keyboard())
-            reset_flow(session)
-            return
-
-        address = point.get("address") or "адрес не указан"
+        address = session.selected_point_address or "адрес не указан"
         await query.message.reply_text(
             "Вы планируете начать смену:\n"
-            f"• Точка: {point.get('short_name', '—')}\n"
+            f"• Точка: {session.selected_point_name or '—'}\n"
             f"• Адрес: {address}\n"
             f"• Роль: {ROLE_LABELS.get(role, role)}\n"
             "Чтобы начать смену — отправьте трансляцию геопозиции.",
@@ -372,11 +440,20 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
         session = session_store.get_or_create(user.id, chat.id)
         data = query.data
         if data == "change_point":
-            session.selected_point_index = None
-            session.selected_role = None
-            session.gate_attempt = 0
-            session.gate_last_reason = None
-            session.mode = MODE_CHOOSE_POINT
+            session_store.patch(
+                session,
+                selected_point_index=None,
+                selected_point_id=None,
+                selected_point_name=None,
+                selected_point_address=None,
+                selected_point_lat=None,
+                selected_point_lon=None,
+                selected_point_radius=None,
+                selected_role=None,
+                gate_attempt=0,
+                gate_last_reason=None,
+                mode=MODE_CHOOSE_POINT,
+            )
             await query.message.reply_text("Хорошо, выбираем точку заново.")
             await ask_points(update, context)
             return
