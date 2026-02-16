@@ -1,4 +1,3 @@
-import math
 import time
 import logging
 from datetime import datetime
@@ -8,15 +7,13 @@ from telegram.ext import ContextTypes, MessageHandler, filters
 
 from shiftbot import config
 from shiftbot.geo import haversine_m
-from shiftbot.live_registry import LIVE_REGISTRY
 from shiftbot import guards
-from shiftbot.guards import ensure_staff_active
 from shiftbot.handlers_shift import active_shift_keyboard, main_menu_keyboard
-from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS_OUT
+from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS_OUT, STATUS_UNKNOWN
 from shiftbot.opencart_client import ApiUnavailableError
 
 
-def build_location_handlers(session_store, staff_service, oc_client, logger):
+def build_location_handlers(session_store, staff_service, oc_client, dead_soul_detector, logger):
     role_map = {
         "cashier": "cashier",
         "baker": "baker",
@@ -42,6 +39,12 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         except (TypeError, ValueError):
             return None
 
+    def as_int(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
     def retry_inline_keyboard(include_issue: bool = False) -> InlineKeyboardMarkup:
         rows = [
             [InlineKeyboardButton("📍 Отправить ещё раз", callback_data="send_location")],
@@ -62,23 +65,79 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
             ]
         )
 
-    async def maybe_notify_admin(context, text: str) -> None:
-        if config.ADMIN_CHAT_ID <= 0:
-            logger.warning("ADMIN_CHAT_ID_NOT_SET")
-            return
-        await context.bot.send_message(chat_id=config.ADMIN_CHAT_ID, text=text)
+    def admin_chat_ids_from_context(context: ContextTypes.DEFAULT_TYPE) -> list[int]:
+        raw = context.application.bot_data.get("admin_chat_ids") if context and context.application else None
+        if isinstance(raw, list):
+            return [int(chat_id) for chat_id in raw if isinstance(chat_id, int) and chat_id > 0]
+        if config.ADMIN_CHAT_ID > 0:
+            return [config.ADMIN_CHAT_ID]
+        return []
 
-    async def handle_active_shift_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE, session, location) -> None:
-        if session.active_point_lat is None or session.active_point_lon is None or not session.active_shift_id:
+    async def maybe_notify_admin(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+        chat_ids = admin_chat_ids_from_context(context)
+        if not chat_ids:
+            logger.warning("ADMIN_CHAT_IDS_NOT_SET")
+            return
+        for chat_id in chat_ids:
+            await context.bot.send_message(chat_id=chat_id, text=text)
+
+    async def ensure_active_shift(session, staff_id: int) -> dict | None:
+        if session.active_shift_id:
+            return {
+                "shift_id": session.active_shift_id,
+                "point_id": session.active_point_id,
+                "point_name": session.active_point_name,
+                "point_lat": session.active_point_lat,
+                "point_lon": session.active_point_lon,
+                "point_radius": session.active_point_radius,
+            }
+
+        shift = await oc_client.get_active_shift_by_staff(staff_id)
+        if not isinstance(shift, dict):
+            return None
+
+        shift_id = shift.get("shift_id") or shift.get("id")
+        try:
+            session.active_shift_id = int(shift_id) if shift_id is not None else None
+        except (TypeError, ValueError):
+            session.active_shift_id = None
+        session.active_started_at = shift.get("started_at") or session.active_started_at
+
+        point_id = shift.get("point_id")
+        try:
+            session.active_point_id = int(point_id) if point_id is not None else session.active_point_id
+        except (TypeError, ValueError):
+            pass
+
+        session.active_point_name = shift.get("point_name") or session.active_point_name
+        session.active_point_lat = as_float(shift.get("point_lat") or shift.get("geo_lat") or shift.get("lat")) or session.active_point_lat
+        session.active_point_lon = as_float(shift.get("point_lon") or shift.get("geo_lon") or shift.get("lon")) or session.active_point_lon
+        session.active_point_radius = as_float(shift.get("point_radius") or shift.get("geo_radius_m") or shift.get("radius")) or session.active_point_radius
+        return shift
+
+    async def handle_active_shift_monitoring(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        session,
+        location,
+        *,
+        staff_id: int,
+    ) -> None:
+        if not session.active_shift_id:
             return
 
         now = time.time()
         lat = location.latitude
         lon = location.longitude
         accuracy = getattr(location, "horizontal_accuracy", None)
-        dist_m = haversine_m(lat, lon, session.active_point_lat, session.active_point_lon)
-        radius_m = session.active_point_radius or float(config.DEFAULT_RADIUS_M)
-        in_zone = dist_m <= radius_m
+        point_lat = session.active_point_lat
+        point_lon = session.active_point_lon
+        if point_lat is not None and point_lon is not None:
+            dist_m = haversine_m(lat, lon, point_lat, point_lon)
+            radius_m = session.active_point_radius or float(config.DEFAULT_RADIUS_M)
+        else:
+            dist_m = None
+            radius_m = None
 
         session.last_ping_ts = now
         session.last_distance_m = dist_m
@@ -89,95 +148,86 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         session.last_acc = float(accuracy) if accuracy is not None else None
         session.last_dist_m = dist_m
 
-        if in_zone:
-            session.last_status = STATUS_IN
-            session.out_streak = 0
-            session.consecutive_out_count = 0
-        else:
-            session.last_status = STATUS_OUT
-            session.out_streak += 1
-            session.consecutive_out_count = min(session.consecutive_out_count + 1, config.OUT_LIMIT)
+        try:
+            response = await oc_client.ping_add(
+                shift_id=session.active_shift_id,
+                staff_id=staff_id,
+                lat=lat,
+                lon=lon,
+                acc=float(accuracy) if accuracy is not None else None,
+            )
+        except ApiUnavailableError:
+            logger.warning("PING_ADD_UNAVAILABLE shift_id=%s staff_id=%s", session.active_shift_id, staff_id)
+            return
 
-            if session.out_streak == config.OUT_STREAK_ALERT and (now - session.last_warn_ts) >= config.NOTIFY_COOLDOWN_SEC:
-                session.last_warn_ts = now
-                await update.message.reply_text("⚠️ Вы вне рабочей зоны, вернитесь на точку и проверьте Live Location.")
+        status = str(response.get("status") or "").upper() or STATUS_UNKNOWN
+        out_streak = as_int(response.get("out_streak")) or 0
+        out_rounds = as_int(response.get("out_violation_rounds")) or 0
+        dist_from_api = as_float(response.get("dist_m"))
+        radius_from_api = as_float(response.get("radius_m"))
 
-                staff = await staff_service.get_staff(session.user_id)
-                staff_id = (staff or {}).get("staff_id") or "—"
-                await maybe_notify_admin(
-                    context,
-                    (
-                        "🚨 OUT streak alert\n"
-                        f"shift#{session.active_shift_id} staff#{staff_id}\n"
-                        f"point#{session.active_point_id or '—'} dist≈{dist_m:.0f}м r={radius_m:.0f}м\n"
-                        f"OUT подряд: {session.out_streak}"
-                    ),
-                )
+        if dist_from_api is not None:
+            session.last_distance_m = dist_from_api
+            session.last_dist_m = dist_from_api
+        if radius_from_api is not None:
+            session.active_point_radius = radius_from_api
 
-        bucket = math.floor(now / config.GPS_BUCKET_SEC)
-        bucket_key = f"{round(lat, 5)}:{round(lon, 5)}:{bucket}"
-        if session.last_bucket_key == bucket_key:
-            session.same_bucket_hits += 1
-        else:
-            session.same_bucket_hits = 1
-            session.last_bucket_key = bucket_key
+        session.last_status = status
+        session.out_streak = max(out_streak, 0)
+        session.consecutive_out_count = max(out_streak, 0)
 
-        staff = await staff_service.get_staff(session.user_id)
-        staff_id = None
-        tg_user_id = None
-        if staff:
-            try:
-                staff_id = int(staff.get("staff_id")) if staff.get("staff_id") is not None else None
-            except (TypeError, ValueError):
-                staff_id = None
-            try:
-                tg_user_id = int(staff.get("telegram_user_id")) if staff.get("telegram_user_id") is not None else None
-            except (TypeError, ValueError):
-                tg_user_id = None
+        if status == STATUS_IN:
+            session.last_out_violation_notified_round = max(session.last_out_violation_notified_round, 0)
 
-        LIVE_REGISTRY.cleanup_stale(stale_timeout_sec=600, now_ts=now)
-        LIVE_REGISTRY.upsert_shift(
+        if status == STATUS_OUT and out_streak == 3:
+            if (now - session.last_out_warn_at) >= config.ALERT_COOLDOWN_OUT_SEC:
+                session.last_out_warn_at = now
+                d = dist_from_api if dist_from_api is not None else dist_m
+                r = radius_from_api if radius_from_api is not None else radius_m
+                if d is not None and r is not None:
+                    await update.message.reply_text(
+                        f"⚠️ Вы вне рабочей зоны (≈{d:.0f} м, радиус {r:.0f} м). Вернитесь на точку.",
+                        reply_markup=out_alert_keyboard(),
+                    )
+                else:
+                    await update.message.reply_text("⚠️ Вы вне рабочей зоны, вернитесь на точку.", reply_markup=out_alert_keyboard())
+
+            if out_rounds > session.last_out_violation_notified_round:
+                session.last_out_violation_notified_round = out_rounds
+                if out_rounds == 1:
+                    admin_text = (
+                        "⚠️ Подозрительная активность: зафиксировано 3 OUT подряд. "
+                        "Ждём повторного нарушения.\n"
+                        f"shift#{session.active_shift_id} staff#{staff_id} point#{session.active_point_id or '—'}"
+                    )
+                else:
+                    admin_text = (
+                        "🚨 Повторное нарушение геозоны: запросить проверку.\n"
+                        f"shift#{session.active_shift_id} staff#{staff_id} point#{session.active_point_id or '—'}\n"
+                        f"out_violation_rounds={out_rounds}"
+                    )
+                await maybe_notify_admin(context, admin_text)
+
+        if status == STATUS_UNKNOWN and (now - session.last_unknown_warn_ts) >= config.ALERT_COOLDOWN_OUT_SEC:
+            session.last_unknown_warn_ts = now
+            await update.message.reply_text("ℹ️ Не удалось определить статус GPS. Проверьте, что геолокация включена.")
+
+        sig = f"{round(lat, config.GPS_SIG_ROUND)}:{round(lon, config.GPS_SIG_ROUND)}"
+        point_id = session.selected_point_id or session.active_point_id
+        alerts = dead_soul_detector.register_ping(
             shift_id=session.active_shift_id,
             staff_id=staff_id,
-            tg_user_id=tg_user_id,
-            point_id=session.active_point_id,
-            bucket_key=bucket_key,
+            point_id=point_id,
+            sig=sig,
             now_ts=now,
         )
-
-        same_shifts = LIVE_REGISTRY.get_same_signature_shifts(session.active_shift_id, bucket_key)
-        touched_pairs: set[str] = set()
-
-        for other_shift_id, other_data in same_shifts:
-            pair_key, streak = LIVE_REGISTRY.touch_pair(session.active_shift_id, other_shift_id, bucket_key, now_ts=now)
-            touched_pairs.add(pair_key)
-            if streak < config.SAME_GPS_STREAK_ALERT:
-                continue
-            if not LIVE_REGISTRY.can_notify_pair(pair_key, config.NOTIFY_COOLDOWN_SEC, now_ts=now):
-                continue
-
-            me = LIVE_REGISTRY.get_shift(session.active_shift_id) or {}
+        for alert in alerts:
             await maybe_notify_admin(
                 context,
                 (
-                    "⚠️ Возможные мёртвые души: "
-                    f"shift#{session.active_shift_id} staff#{me.get('staff_id', '—')} "
-                    f"и shift#{other_shift_id} staff#{other_data.get('staff_id', '—')} "
-                    f"совпадают по GPS {streak} раз подряд, точка {session.active_point_id or '—'}"
-                ),
-            )
-
-        LIVE_REGISTRY.clear_shift_pairs_except(session.active_shift_id, touched_pairs)
-
-        if config.DEBUG_GPS_NOTIFY and (now - session.last_notify_ts) >= config.GPS_BUCKET_SEC:
-            session.last_notify_ts = now
-            zone_label = "IN" if in_zone else "OUT"
-            await maybe_notify_admin(
-                context,
-                (
-                    f"[DEBUG] shift#{session.active_shift_id} zone={zone_label} "
-                    f"dist≈{dist_m:.0f}м r={radius_m:.0f}м out_streak={session.out_streak} "
-                    f"same_bucket_hits={session.same_bucket_hits}"
+                    "🚨 Мёртвые души: 10 совпадений подряд GPS. "
+                    f"staffA={alert['staff_a']} staffB={alert['staff_b']} "
+                    f"точка={alert['point_id'] or '—'} sig={alert['sig']}"
                 ),
             )
 
@@ -190,16 +240,33 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         if not user or not chat:
             return
 
-        if not await ensure_staff_active(update, context, staff_service, logger):
-            return
-
         session = session_store.get_or_create(user.id, chat.id)
 
-        if session.mode != MODE_AWAITING_LOCATION and session.active_shift_id:
-            await handle_active_shift_monitoring(update, context, session, update.message.location)
+        staff = await guards.get_staff_or_reply(update, context, staff_service, logger)
+        if not staff:
+            return
+
+        try:
+            oc_staff_id = int(staff["staff_id"])
+        except (KeyError, TypeError, ValueError):
+            logger.error("LOCATION_STAFF_ID_INVALID staff=%s", staff)
             return
 
         if session.mode != MODE_AWAITING_LOCATION:
+            try:
+                await ensure_active_shift(session, oc_staff_id)
+            except ApiUnavailableError:
+                logger.warning("ACTIVE_SHIFT_RECOVERY_FAILED staff_id=%s", oc_staff_id)
+                return
+
+            if session.active_shift_id:
+                await handle_active_shift_monitoring(
+                    update,
+                    context,
+                    session,
+                    update.message.location,
+                    staff_id=oc_staff_id,
+                )
             return
 
         log = logging.getLogger("geo_gate")
@@ -231,12 +298,7 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         mode = session.mode
         acc_text = f"{accuracy:.0f}" if accuracy is not None else "неизвестна"
 
-        staff = await guards.get_staff_or_reply(update, context, staff_service, logger)
-        if not staff:
-            return
-
         try:
-            oc_staff_id = int(staff["staff_id"])
             tg_user_id = int(staff["telegram_user_id"])
         except (KeyError, TypeError, ValueError):
             logger.error("GEO_GATE_STAFF_IDS_INVALID staff=%s", staff)
@@ -473,6 +535,8 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         session.same_gps_signature = None
         session.last_out_warn_at = 0.0
         session.last_admin_alert_at = 0.0
+        session.last_out_violation_notified_round = 0
+        session.last_unknown_warn_ts = 0.0
         session.mode = MODE_IDLE
 
         success_message = (

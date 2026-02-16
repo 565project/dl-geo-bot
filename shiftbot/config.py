@@ -18,8 +18,23 @@ GATE_MAX_ATTEMPTS = int(os.getenv("GATE_MAX_ATTEMPTS", "5"))
 GATE_RADIUS_STEP_M = int(os.getenv("GATE_RADIUS_STEP_M", "10"))
 
 OUT_LIMIT = int(os.getenv("OUT_LIMIT", "3"))
+
+
+def _parse_admin_phones(raw: str) -> list[str]:
+    phones = [item.strip() for item in raw.split(",") if item.strip()]
+    return phones or ["89033262408"]
+
+
 ADMIN_PHONE = os.getenv("ADMIN_PHONE", "89033262408")
-OUT_COOLDOWN_SEC = int(os.getenv("OUT_COOLDOWN_SEC", "300"))
+ADMIN_PHONES = _parse_admin_phones(os.getenv("ADMIN_PHONES", ADMIN_PHONE))
+DEAD_SOUL_STREAK = int(os.getenv("DEAD_SOUL_STREAK", "10"))
+DEAD_SOUL_BUCKET_SEC = int(os.getenv("DEAD_SOUL_BUCKET_SEC", "10"))
+DEAD_SOUL_WINDOW_SEC = int(os.getenv("DEAD_SOUL_WINDOW_SEC", "25"))
+GPS_SIG_ROUND = int(os.getenv("GPS_SIG_ROUND", "5"))
+ALERT_COOLDOWN_OUT_SEC = int(os.getenv("ALERT_COOLDOWN_OUT_SEC", "300"))
+ALERT_COOLDOWN_DEAD_SEC = int(os.getenv("ALERT_COOLDOWN_DEAD_SEC", "900"))
+
+OUT_COOLDOWN_SEC = ALERT_COOLDOWN_OUT_SEC
 
 OUT_STREAK_ALERT = int(os.getenv("OUT_STREAK_ALERT", "3"))
 SAME_GPS_STREAK_ALERT = int(os.getenv("SAME_GPS_STREAK_ALERT", "20"))

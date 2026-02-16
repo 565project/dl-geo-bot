@@ -56,7 +56,23 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
         await target.reply_text(text, reply_markup=main_menu_keyboard())
 
 
-def build_shift_handlers(session_store, staff_service, oc_client, logger):
+def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_detector, logger):
+    def admin_chat_ids_from_context(context: ContextTypes.DEFAULT_TYPE) -> list[int]:
+        raw = context.application.bot_data.get("admin_chat_ids") if context and context.application else None
+        if isinstance(raw, list):
+            return [int(chat_id) for chat_id in raw if isinstance(chat_id, int) and chat_id > 0]
+        if config.ADMIN_CHAT_ID > 0:
+            return [config.ADMIN_CHAT_ID]
+        return []
+
+    async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+        chat_ids = admin_chat_ids_from_context(context)
+        if not chat_ids:
+            logger.warning("ADMIN_CHAT_IDS_NOT_SET")
+            return
+        for chat_id in chat_ids:
+            await context.bot.send_message(chat_id=chat_id, text=text)
+
     def reset_flow(session) -> None:
         session_store.reset_flow(session)
 
@@ -231,6 +247,7 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
 
         if active_shift_id:
             LIVE_REGISTRY.remove_shift(active_shift_id)
+            dead_soul_detector.remove_shift(active_shift_id)
         session_store.clear_shift_state(session)
         reset_flow(session)
         await msg.reply_text("Смена завершена", reply_markup=main_menu_keyboard())
@@ -388,11 +405,11 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
             return
 
         if session.mode == MODE_REPORT_ISSUE:
-            if config.ADMIN_CHAT_ID <= 0:
+            if not admin_chat_ids_from_context(context):
                 await msg.reply_text("Не удалось отправить сообщение администратору. Попробуйте позже.")
                 return
-            await context.bot.send_message(
-                chat_id=config.ADMIN_CHAT_ID,
+            await notify_admins(
+                context,
                 text=(
                     "🐞 Сообщение об ошибке от сотрудника\n"
                     f"User ID: {user.id}\n"
