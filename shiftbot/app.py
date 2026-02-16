@@ -119,4 +119,6 @@ class ShiftBotApp:
     def run(self) -> None:
         self.register_handlers(self.application)
         print("Bot started (polling). Ctrl+C to stop.")
-        self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+        self.application.run_polling(
+            allowed_updates=["message", "edited_message", "callback_query"],
+        )
