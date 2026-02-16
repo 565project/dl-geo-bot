@@ -10,6 +10,7 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, Mes
 from shiftbot import config
 from shiftbot.guards import ensure_staff_active
 from shiftbot.models import MODE_AWAITING_LOCATION, MODE_CHOOSE_POINT, MODE_CHOOSE_ROLE, MODE_IDLE, MODE_REPORT_ISSUE
+from shiftbot.opencart_client import ApiUnavailableError
 
 BTN_START_SHIFT = "✅ Начать смену"
 BTN_STOP_SHIFT = "🛑 Завершить смену"
@@ -44,6 +45,10 @@ def location_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         one_time_keyboard=False,
     )
+
+
+def api_retry_keyboard(callback_data: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("Повторить", callback_data=callback_data)]])
 
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str = "Главное меню") -> None:
@@ -172,8 +177,11 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
         session = session_store.get_or_create(user.id, chat.id)
         try:
             raw_points = await oc_client.get_points()
-        except RuntimeError:
-            await msg.reply_text("Не удалось получить список точек. Попробуйте чуть позже.", reply_markup=main_menu_keyboard())
+        except ApiUnavailableError:
+            await msg.reply_text(
+                "Сайт временно недоступен (ошибка сети). Попробуйте ещё раз через 10 секунд.",
+                reply_markup=api_retry_keyboard("retry_points"),
+            )
             return
 
         points = [normalize_point(point) for point in raw_points]
@@ -237,8 +245,11 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
         payload = {"shift_id": session.active_shift_id, "reason": "manual"}
         try:
             result = await oc_client.shift_end(payload)
-        except RuntimeError:
-            await msg.reply_text("Не удалось завершить смену. Попробуйте ещё раз.")
+        except ApiUnavailableError:
+            await msg.reply_text(
+                "Сайт временно недоступен (ошибка сети). Попробуйте ещё раз через 10 секунд.",
+                reply_markup=api_retry_keyboard("retry_stop_shift"),
+            )
             return
 
         if result.get("ok") is False and result.get("error"):
@@ -465,6 +476,14 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
             )
             return
 
+        if data == "retry_points":
+            await ask_points(update, context)
+            return
+
+        if data == "retry_stop_shift":
+            await stop_shift_flow(update, context)
+            return
+
         if data == "report_issue":
             await start_report_issue_mode(query.message, session)
             return
@@ -484,5 +503,5 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
         CommandHandler("help", cmd_help),
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text),
         CallbackQueryHandler(role_callback, pattern=r"^role:"),
-        CallbackQueryHandler(action_callback, pattern=r"^(change_point|send_location|report_issue)$"),
+        CallbackQueryHandler(action_callback, pattern=r"^(change_point|send_location|report_issue|retry_points|retry_stop_shift)$"),
     ]
