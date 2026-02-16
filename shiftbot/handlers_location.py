@@ -7,7 +7,6 @@ from telegram.ext import ContextTypes, MessageHandler, filters
 
 from shiftbot import config
 from shiftbot.geo import haversine_m
-from shiftbot import guards
 from shiftbot.handlers_shift import active_shift_keyboard, main_menu_keyboard
 from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS_OUT, STATUS_UNKNOWN
 from shiftbot.opencart_client import ApiUnavailableError
@@ -81,26 +80,23 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         for chat_id in chat_ids:
             await context.bot.send_message(chat_id=chat_id, text=text)
 
-    async def ensure_active_shift(session, staff_id: int) -> dict | None:
-        if session.active_shift_id:
-            return {
-                "shift_id": session.active_shift_id,
-                "point_id": session.active_point_id,
-                "point_name": session.active_point_name,
-                "point_lat": session.active_point_lat,
-                "point_lon": session.active_point_lon,
-                "point_radius": session.active_point_radius,
-            }
+    def clear_active_shift(session) -> None:
+        session.active_shift_id = None
+        session.active_started_at = None
+        session.active_point_id = None
+        session.active_point_name = None
+        session.active_point_lat = None
+        session.active_point_lon = None
+        session.active_point_radius = None
+        session.active_role = None
 
-        shift = await oc_client.get_active_shift_by_staff(staff_id)
-        if not isinstance(shift, dict):
-            return None
-
+    def sync_session_from_shift(session, shift: dict) -> None:
         shift_id = shift.get("shift_id") or shift.get("id")
         try:
             session.active_shift_id = int(shift_id) if shift_id is not None else None
         except (TypeError, ValueError):
             session.active_shift_id = None
+
         session.active_started_at = shift.get("started_at") or session.active_started_at
 
         point_id = shift.get("point_id")
@@ -113,11 +109,21 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         session.active_point_lat = as_float(shift.get("point_lat") or shift.get("geo_lat") or shift.get("lat")) or session.active_point_lat
         session.active_point_lon = as_float(shift.get("point_lon") or shift.get("geo_lon") or shift.get("lon")) or session.active_point_lon
         session.active_point_radius = as_float(shift.get("point_radius") or shift.get("geo_radius_m") or shift.get("radius")) or session.active_point_radius
+        session.active_role = role_map.get(str(shift.get("role") or "").lower(), session.active_role)
+
+    async def ensure_active_shift(session, staff_id: int) -> dict | None:
+        shift = await oc_client.get_active_shift_by_staff(staff_id)
+        if not isinstance(shift, dict):
+            clear_active_shift(session)
+            return None
+
+        sync_session_from_shift(session, shift)
         return shift
 
     async def handle_active_shift_monitoring(
         update: Update,
         context: ContextTypes.DEFAULT_TYPE,
+        message,
         session,
         location,
         *,
@@ -149,6 +155,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         session.last_dist_m = dist_m
 
         try:
+            logger.info("CALL ping_add shift_id=%s staff_id=%s", session.active_shift_id, staff_id)
             response = await oc_client.ping_add(
                 shift_id=session.active_shift_id,
                 staff_id=staff_id,
@@ -163,6 +170,16 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         status = str(response.get("status") or "").upper() or STATUS_UNKNOWN
         out_streak = as_int(response.get("out_streak")) or 0
         out_rounds = as_int(response.get("out_violation_rounds")) or 0
+        reason = response.get("reason")
+        logger.info(
+            "PING_ADD shift_id=%s staff_id=%s -> status=%s reason=%s out_streak=%s rounds=%s",
+            session.active_shift_id,
+            staff_id,
+            status,
+            reason,
+            out_streak,
+            out_rounds,
+        )
         dist_from_api = as_float(response.get("dist_m"))
         radius_from_api = as_float(response.get("radius_m"))
 
@@ -185,12 +202,12 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
                 d = dist_from_api if dist_from_api is not None else dist_m
                 r = radius_from_api if radius_from_api is not None else radius_m
                 if d is not None and r is not None:
-                    await update.message.reply_text(
+                    await message.reply_text(
                         f"⚠️ Вы вне рабочей зоны (≈{d:.0f} м, радиус {r:.0f} м). Вернитесь на точку.",
                         reply_markup=out_alert_keyboard(),
                     )
                 else:
-                    await update.message.reply_text("⚠️ Вы вне рабочей зоны, вернитесь на точку.", reply_markup=out_alert_keyboard())
+                    await message.reply_text("⚠️ Вы вне рабочей зоны, вернитесь на точку.", reply_markup=out_alert_keyboard())
 
             if out_rounds > session.last_out_violation_notified_round:
                 session.last_out_violation_notified_round = out_rounds
@@ -210,7 +227,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
 
         if status == STATUS_UNKNOWN and (now - session.last_unknown_warn_ts) >= config.ALERT_COOLDOWN_OUT_SEC:
             session.last_unknown_warn_ts = now
-            await update.message.reply_text("ℹ️ Не удалось определить статус GPS. Проверьте, что геолокация включена.")
+            await message.reply_text("ℹ️ Не удалось определить статус GPS. Проверьте, что геолокация включена.")
 
         sig = f"{round(lat, config.GPS_SIG_ROUND)}:{round(lon, config.GPS_SIG_ROUND)}"
         point_id = session.selected_point_id or session.active_point_id
@@ -232,18 +249,33 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             )
 
     async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not update.message or not update.message.location:
+        message = update.effective_message
+        if not message or not message.location:
             return
+
+        lat = message.location.latitude
+        lon = message.location.longitude
+        acc = getattr(message.location, "horizontal_accuracy", None)
 
         user = update.effective_user
         chat = update.effective_chat
         if not user or not chat:
             return
 
+        logger.info(
+            "LOCATION_UPDATE tg=%s is_edited=%s lat=%s lon=%s acc=%s",
+            user.id,
+            bool(update.edited_message),
+            lat,
+            lon,
+            acc,
+        )
+
         session = session_store.get_or_create(user.id, chat.id)
 
-        staff = await guards.get_staff_or_reply(update, context, staff_service, logger)
+        staff = await oc_client.get_staff_by_telegram(user.id)
         if not staff:
+            logger.info("LOCATION_UPDATE staff_not_found tg=%s", user.id)
             return
 
         try:
@@ -252,21 +284,25 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             logger.error("LOCATION_STAFF_ID_INVALID staff=%s", staff)
             return
 
-        if session.mode != MODE_AWAITING_LOCATION:
-            try:
-                await ensure_active_shift(session, oc_staff_id)
-            except ApiUnavailableError:
-                logger.warning("ACTIVE_SHIFT_RECOVERY_FAILED staff_id=%s", oc_staff_id)
-                return
+        try:
+            await ensure_active_shift(session, oc_staff_id)
+        except ApiUnavailableError:
+            logger.warning("ACTIVE_SHIFT_RECOVERY_FAILED staff_id=%s", oc_staff_id)
+            return
 
-            if session.active_shift_id:
-                await handle_active_shift_monitoring(
-                    update,
-                    context,
-                    session,
-                    update.message.location,
-                    staff_id=oc_staff_id,
-                )
+        if session.active_shift_id:
+            await handle_active_shift_monitoring(
+                update,
+                context,
+                message,
+                session,
+                message.location,
+                staff_id=oc_staff_id,
+            )
+        else:
+            logger.info("LOCATION_UPDATE no active shift staff_id=%s", oc_staff_id)
+
+        if session.mode != MODE_AWAITING_LOCATION:
             return
 
         log = logging.getLogger("geo_gate")
@@ -280,15 +316,13 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             print(msg, flush=True)
 
         if session.selected_role is None or session.selected_point_id is None:
-            await update.message.reply_text("Сначала выберите точку и роль.", reply_markup=main_menu_keyboard())
+            await message.reply_text("Сначала выберите точку и роль.", reply_markup=main_menu_keyboard())
             session_store.reset_flow(session)
             return
 
-        status_message = await update.message.reply_text("⏳ Проверяем геопозицию...")
+        status_message = await message.reply_text("⏳ Проверяем геопозицию...")
 
-        lat = update.message.location.latitude
-        lon = update.message.location.longitude
-        accuracy = getattr(update.message.location, "horizontal_accuracy", None)
+        accuracy = acc
         session.last_accuracy_m = float(accuracy) if accuracy is not None else None
 
         point_lat_raw = as_float(session.selected_point_lat)
@@ -550,6 +584,9 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         success_message += "Смена начата. Удачной работы!"
 
         await status_message.edit_text(success_message)
-        await update.message.reply_text("Главное меню снова доступно ниже.", reply_markup=main_menu_keyboard())
+        await message.reply_text("Главное меню снова доступно ниже.", reply_markup=main_menu_keyboard())
 
-    return [MessageHandler(filters.LOCATION, handle_location_message)]
+    return [
+        MessageHandler(filters.UpdateType.MESSAGE & filters.LOCATION, handle_location_message),
+        MessageHandler(filters.UpdateType.EDITED_MESSAGE & filters.LOCATION, handle_location_message),
+    ]
