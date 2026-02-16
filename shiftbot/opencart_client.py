@@ -1,5 +1,6 @@
 from typing import Optional
 import asyncio
+import json
 
 import httpx
 
@@ -31,6 +32,8 @@ class OpenCartClient:
         method: str,
         params: Optional[dict] = None,
         data: Optional[dict] = None,
+        json_data: Optional[dict] = None,
+        headers: Optional[dict] = None,
         *,
         return_meta: bool = False,
     ) -> dict:
@@ -60,11 +63,18 @@ class OpenCartClient:
                 attempt,
                 method,
                 all_params,
-                data is not None,
+                (data is not None or json_data is not None),
             )
             try:
                 if method.upper() == "POST":
-                    response = await self._client.request(method, url, params=all_params, data=data)
+                    response = await self._client.request(
+                        method,
+                        url,
+                        params=all_params,
+                        data=data,
+                        json=json_data,
+                        headers=headers,
+                    )
                 else:
                     response = await self._client.request(method, url, params=all_params)
             except network_errors as exc:
@@ -120,6 +130,13 @@ class OpenCartClient:
                 raise ApiUnavailableError("temporary_api_error") from exc
 
             if response.status_code >= 400:
+                self.logger.warning(
+                    "API_NON_2XX method=%s url=%s status=%s body=%s",
+                    method,
+                    url,
+                    response.status_code,
+                    response.text[:300],
+                )
                 return {
                     "success": False,
                     "status": response.status_code,
@@ -301,11 +318,17 @@ class OpenCartClient:
 
     async def violation_tick(self, shift_id: int) -> dict:
         payload = {"shift_id": str(shift_id)}
+        payload_json = json.dumps(payload, ensure_ascii=False)
+        request_headers = {"Content-Type": "application/json"}
+        self.logger.info("VIOLATION_TICK_REQUEST payload=%s", payload)
+        self.logger.info("VIOLATION_TICK_REQUEST_JSON body=%s", payload_json)
+        self.logger.info("VIOLATION_TICK_REQUEST_HEADERS headers=%s", request_headers)
         try:
             data = await self._request(
                 "POST",
                 params={"route": "dl/geo_api/violation_tick"},
-                data=payload,
+                json_data=payload,
+                headers=request_headers,
             )
         except ApiUnavailableError as exc:
             self.logger.warning("VIOLATION_TICK_UNAVAILABLE shift_id=%s error=%s", shift_id, exc)
