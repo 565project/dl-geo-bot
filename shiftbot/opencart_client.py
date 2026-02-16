@@ -63,7 +63,17 @@ class OpenCartClient:
         points = payload.get("points")
         if not isinstance(points, list):
             return []
-        return [point for point in points if isinstance(point, dict)]
+
+        normalized_points: list[dict] = []
+        for point in points:
+            if not isinstance(point, dict):
+                continue
+            item = dict(point)
+            item["geo_lat"] = point.get("geo_lat")
+            item["geo_lon"] = point.get("geo_lon") or point.get("geo_lng") or point.get("geo_long")
+            item["geo_radius_m"] = point.get("geo_radius_m") or point.get("radius") or point.get("geo_radius")
+            normalized_points.append(item)
+        return normalized_points
 
     async def shift_start(self, payload: dict) -> dict:
         self._require_config()
