@@ -17,7 +17,7 @@ def _as_int(value):
 
 
 def _alert_cooldown_sec(alert_type: str) -> int:
-    if alert_type == "staff_out_of_zone_warn":
+    if alert_type in {"staff_out_of_zone_warn", "admin_same_location_2"}:
         return STAFF_ALERT_COOLDOWN_SEC
     return DEFAULT_ALERT_COOLDOWN_SEC
 
@@ -26,6 +26,7 @@ def _alert_text(alert: dict) -> tuple[str | None, str | None]:
     alert_type = str(alert.get("type") or "")
     shift_id = alert.get("shift_id") or "—"
     staff_id = alert.get("staff_id") or "—"
+    full_name = alert.get("full_name")
     point_id = alert.get("point_id") or "—"
 
     if alert_type == "staff_out_of_zone_warn":
@@ -53,6 +54,15 @@ def _alert_text(alert: dict) -> tuple[str | None, str | None]:
             "Подозрительная активность: одинаковые координаты 10 раз подряд. "
             f"Сотрудник {staff_id}, точка {point_id}, смена {shift_id}. "
             "Срочно запросить фотоподтверждение.",
+        )
+    if alert_type == "admin_same_location_2":
+        return (
+            None,
+            "⚠ Подозрительная гео-активность\n"
+            f"Сотрудник: {full_name or staff_id}\n"
+            f"Точка: {point_id}\n"
+            "2 раза подряд отправлены одинаковые координаты.\n"
+            "Требуется проверка (возможна фиксация с одного устройства).",
         )
     return None, None
 
