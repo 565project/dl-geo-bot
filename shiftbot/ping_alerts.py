@@ -2,8 +2,6 @@ import time
 
 from telegram.ext import ContextTypes
 
-from shiftbot import config
-
 PING_ALERT_COOLDOWN_KEY = "ping_alert_cooldowns"
 STAFF_ALERT_COOLDOWN_SEC = 120
 DEFAULT_ALERT_COOLDOWN_SEC = 300
@@ -73,11 +71,7 @@ def _admin_chat_ids(context: ContextTypes.DEFAULT_TYPE) -> list[int]:
         values = [int(chat_id) for chat_id in raw if isinstance(chat_id, int) and chat_id > 0]
         if values:
             return sorted(set(values))
-
-    values = list(config.ADMIN_CHAT_IDS)
-    if config.ADMIN_CHAT_ID > 0:
-        values.append(config.ADMIN_CHAT_ID)
-    return sorted(set(values))
+    return []
 
 
 async def process_ping_alerts(
@@ -124,8 +118,9 @@ async def process_ping_alerts(
 
         if admin_text:
             if not admin_chat_ids:
-                logger.warning("ADMIN_CHAT_IDS_NOT_SET")
-                continue
-            for admin_chat_id in admin_chat_ids:
-                await context.bot.send_message(chat_id=admin_chat_id, text=admin_text)
+                logger.warning("ADMIN_CHAT_IDS_NOT_SET_FALLBACK_TO_STAFF shift_id=%s", shift_id)
+                await context.bot.send_message(chat_id=staff_chat_id, text=admin_text)
+            else:
+                for admin_chat_id in admin_chat_ids:
+                    await context.bot.send_message(chat_id=admin_chat_id, text=admin_text)
             cooldowns[cooldown_key] = now
