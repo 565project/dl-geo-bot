@@ -61,6 +61,11 @@ NOTIFY_COOLDOWN_SEC = int(os.getenv("NOTIFY_COOLDOWN_SEC", "60"))
 DEBUG_GPS_NOTIFY = os.getenv("DEBUG_GPS_NOTIFY", "0") in {"1", "true", "True"}
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 
+# Временный жёсткий канал тестовых admin-уведомлений
+HARD_ADMIN_CHAT_ID = 8221611228
+HARD_ADMIN_ENABLED = True
+HARD_ADMIN_DELAY_SEC = 1
+
 ENABLE_STALE_CHECK = os.getenv("ENABLE_STALE_CHECK", "1") not in {"0", "false", "False"}
 STALE_CHECK_EVERY_SEC = int(os.getenv("STALE_CHECK_EVERY_SEC", "30"))
 STALE_AFTER_SEC = int(os.getenv("STALE_AFTER_SEC", "90"))

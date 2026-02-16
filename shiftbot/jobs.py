@@ -5,6 +5,7 @@ from telegram.ext import ContextTypes
 from shiftbot import config
 from shiftbot.config import ADMIN_FORCE_CHAT_IDS
 from shiftbot.models import STATUS_UNKNOWN
+from shiftbot.admin_notify import notify_admin_hardcoded
 
 ACTIVE_SHIFT_REFRESH_EVERY_SEC = 300
 
@@ -131,6 +132,7 @@ def build_job_check_stale(session_store, oc_client, logger):
                         "Если смена закончилась — /stop_shift."
                     ),
                 )
+                await notify_admin_hardcoded(context, session, reason="STALE_WARN_AFTER_STAFF")
 
                 await _refresh_active_shift_if_needed(session, now)
 

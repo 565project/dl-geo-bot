@@ -5,6 +5,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from shiftbot import config
+from shiftbot.admin_notify import notify_admin_hardcoded
 from shiftbot.guards import ensure_staff_active, get_staff_or_reply
 from shiftbot.live_registry import LIVE_REGISTRY
 from shiftbot.models import MODE_AWAITING_LOCATION, MODE_CHOOSE_POINT, MODE_CHOOSE_ROLE, MODE_IDLE, MODE_REPORT_ISSUE
@@ -78,6 +79,18 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
             return
         for chat_id in chat_ids:
             await context.bot.send_message(chat_id=chat_id, text=text)
+
+    async def cmd_admin_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user = update.effective_user
+        chat = update.effective_chat
+        msg = update.effective_message
+        if not user or not chat or not msg:
+            return
+
+        session = session_store.get_or_create(user.id, chat.id)
+        logger.info("ADMIN_TEST_CMD user_id=%s chat_id=%s", user.id, chat.id)
+        ok = await notify_admin_hardcoded(context, session, reason="ADMIN_TEST_CMD")
+        await msg.reply_text("sent (see logs)" if ok else "failed (see logs)")
 
     def reset_flow(session) -> None:
         session_store.reset_flow(session)
@@ -625,6 +638,7 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
         CommandHandler("status", cmd_status),
         CommandHandler("restart", cmd_restart),
         CommandHandler("help", cmd_help),
+        CommandHandler("admin_test", cmd_admin_test),
         CommandHandler("test_ping_start", cmd_test_ping_start),
         CommandHandler("test_ping_stop", cmd_test_ping_stop),
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text),
