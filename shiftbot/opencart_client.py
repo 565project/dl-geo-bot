@@ -26,7 +26,14 @@ class OpenCartClient:
         if not self.base_url or not self.api_key:
             raise RuntimeError("OC_API_BASE/OC_API_KEY не заданы.")
 
-    async def _request(self, method: str, params: Optional[dict] = None, data: Optional[dict] = None) -> dict:
+    async def _request(
+        self,
+        method: str,
+        params: Optional[dict] = None,
+        data: Optional[dict] = None,
+        *,
+        return_meta: bool = False,
+    ) -> dict:
         self._require_config()
         url = self.base_url
         if not url.endswith("/index.php"):
@@ -36,11 +43,14 @@ class OpenCartClient:
         all_params["key"] = self.api_key
 
         network_backoff = [0.3, 0.8, 1.8]
-        status_backoff = [0.3]
+        status_backoff = [0.3, 0.8]
         network_errors = (
             httpx.ConnectTimeout,
             httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.PoolTimeout,
             httpx.ConnectError,
+            httpx.ReadError,
             httpx.RemoteProtocolError,
         )
 
@@ -114,6 +124,14 @@ class OpenCartClient:
                     "success": False,
                     "status": response.status_code,
                     "json": payload if isinstance(payload, dict) else None,
+                    "text": response.text,
+                }
+
+            if return_meta:
+                return {
+                    "ok": True,
+                    "status": response.status_code,
+                    "json": payload if isinstance(payload, dict) else {},
                     "text": response.text,
                 }
 
@@ -232,6 +250,18 @@ class OpenCartClient:
             data=payload,
         )
         return data if isinstance(data, dict) else {"ok": False, "error": "Некорректный ответ API"}
+
+    async def ping_add_meta(self, payload: dict) -> dict:
+        clean_payload = {str(key): str(value) for key, value in payload.items() if value is not None}
+        clean_payload.pop("ping_at", None)
+        clean_payload.pop("timestamp", None)
+        data = await self._request(
+            "POST",
+            params={"route": "dl/geo_api/ping_add"},
+            data=clean_payload,
+            return_meta=True,
+        )
+        return data if isinstance(data, dict) else {"ok": False, "status": 0, "json": {}, "text": ""}
 
     async def get_active_shift_by_staff(self, staff_id: int) -> dict | None:
         payload = await self._request(
