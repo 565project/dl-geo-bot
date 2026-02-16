@@ -1,3 +1,6 @@
+import asyncio
+import contextlib
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -57,6 +60,8 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
 
 
 def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_detector, logger):
+    TEST_PING_TASKS_KEY = "test_ping_tasks"
+
     def admin_chat_ids_from_context(context: ContextTypes.DEFAULT_TYPE) -> list[int]:
         raw = context.application.bot_data.get("admin_chat_ids") if context and context.application else None
         if isinstance(raw, list):
@@ -93,6 +98,25 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    def as_float(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def test_ping_task_key(user_id: int, chat_id: int) -> str:
+        return f"{user_id}:{chat_id}"
+
+    async def stop_test_ping_task(context: ContextTypes.DEFAULT_TYPE, key: str) -> bool:
+        tasks = context.application.bot_data.setdefault(TEST_PING_TASKS_KEY, {})
+        task = tasks.pop(key, None)
+        if not task:
+            return False
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        return True
 
     def format_point_line(i: int, point: dict) -> str:
         address = (point.get("address") or point.get("link_yandex") or "адрес не указан").strip()
@@ -369,6 +393,86 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
             return
         await show_main_menu(update, context, "Здравствуйте! Выберите действие:")
 
+    async def cmd_test_ping_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user = update.effective_user
+        chat = update.effective_chat
+        msg = update.effective_message
+        if not user or not chat or not msg:
+            return
+
+        args = context.args or []
+        if len(args) < 3:
+            await msg.reply_text("Формат: /test_ping_start <shift_id> <lat> <lon> [interval_sec=60]")
+            return
+
+        shift_id = as_int(args[0])
+        lat = as_float(args[1])
+        lon = as_float(args[2])
+        interval_sec = as_int(args[3]) if len(args) > 3 else 60
+        interval_sec = interval_sec if interval_sec and interval_sec > 0 else 60
+        if shift_id is None or lat is None or lon is None:
+            await msg.reply_text("Некорректные параметры. Пример: /test_ping_start 123 43.23 76.91 60")
+            return
+
+        staff = await get_staff_or_reply(update, context, staff_service, logger)
+        if not staff:
+            return
+        staff_id = as_int(staff.get("staff_id"))
+        if staff_id is None:
+            await msg.reply_text("Не удалось определить staff_id для теста.")
+            return
+
+        key = test_ping_task_key(user.id, chat.id)
+        await stop_test_ping_task(context, key)
+
+        async def _loop() -> None:
+            while True:
+                try:
+                    meta = await oc_client.ping_add_meta(
+                        {
+                            "shift_id": shift_id,
+                            "staff_id": staff_id,
+                            "lat": lat,
+                            "lon": lon,
+                            "source": "tg",
+                        }
+                    )
+                    logger.info(
+                        "TEST_PING status=%s body=%s shift_id=%s staff_id=%s",
+                        meta.get("status"),
+                        meta.get("json") or meta.get("text"),
+                        shift_id,
+                        staff_id,
+                    )
+                    await context.bot.send_message(
+                        chat_id=chat.id,
+                        text=f"TEST ping_add status={meta.get('status')} body={meta.get('json') or meta.get('text')}",
+                    )
+                except ApiUnavailableError as exc:
+                    logger.warning("TEST_PING_UNAVAILABLE shift_id=%s staff_id=%s error=%s", shift_id, staff_id, exc)
+                except Exception as exc:
+                    logger.exception("TEST_PING_ERROR shift_id=%s staff_id=%s error=%s", shift_id, staff_id, exc)
+                await asyncio.sleep(interval_sec)
+
+        task = asyncio.create_task(_loop(), name=f"test-ping-{key}")
+        context.application.bot_data.setdefault(TEST_PING_TASKS_KEY, {})[key] = task
+        await msg.reply_text(
+            f"Запущен /test_ping_start: shift_id={shift_id}, lat={lat}, lon={lon}, interval={interval_sec}s"
+        )
+
+    async def cmd_test_ping_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user = update.effective_user
+        chat = update.effective_chat
+        msg = update.effective_message
+        if not user or not chat or not msg:
+            return
+        key = test_ping_task_key(user.id, chat.id)
+        stopped = await stop_test_ping_task(context, key)
+        if stopped:
+            await msg.reply_text("Тестовый ping-цикл остановлен.")
+        else:
+            await msg.reply_text("Активный тестовый ping-цикл не найден.")
+
     async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         msg = update.message
         user = update.effective_user
@@ -512,6 +616,8 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
         CommandHandler("status", cmd_status),
         CommandHandler("restart", cmd_restart),
         CommandHandler("help", cmd_help),
+        CommandHandler("test_ping_start", cmd_test_ping_start),
+        CommandHandler("test_ping_stop", cmd_test_ping_stop),
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text),
         CallbackQueryHandler(role_callback, pattern=r"^role:"),
         CallbackQueryHandler(action_callback, pattern=r"^(change_point|send_location|report_issue|retry_points|retry_stop_shift|stop_shift_now|show_status)$"),
