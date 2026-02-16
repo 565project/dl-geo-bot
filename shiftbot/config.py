@@ -14,6 +14,8 @@ POINT_LON = float(os.getenv("POINT_LON", "47.894357"))
 
 DEFAULT_RADIUS_M = int(os.getenv("DEFAULT_RADIUS_M", os.getenv("RADIUS_M", "120")))
 ACCURACY_MAX_M = int(os.getenv("ACCURACY_MAX_M", "60"))
+GATE_MAX_ATTEMPTS = int(os.getenv("GATE_MAX_ATTEMPTS", "5"))
+GATE_RADIUS_STEP_M = int(os.getenv("GATE_RADIUS_STEP_M", "10"))
 
 OUT_LIMIT = int(os.getenv("OUT_LIMIT", "3"))
 ADMIN_PHONE = os.getenv("ADMIN_PHONE", "89033262408")

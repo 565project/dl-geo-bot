@@ -125,6 +125,8 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
         session.mode = MODE_CHOOSE_POINT
         session.selected_point_index = None
         session.selected_role = None
+        session.gate_attempt = 0
+        session.gate_last_reason = None
 
         lines = "\n".join(format_point_line(i + 1, point) for i, point in enumerate(points))
         await msg.reply_text(f"Адреса, доступные для работы:\n{lines}")
@@ -333,6 +335,8 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
             return
 
         session.selected_role = role
+        session.gate_attempt = 0
+        session.gate_last_reason = None
         session.mode = MODE_AWAITING_LOCATION
 
         point = selected_point(session)
@@ -370,6 +374,8 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
         if data == "change_point":
             session.selected_point_index = None
             session.selected_role = None
+            session.gate_attempt = 0
+            session.gate_last_reason = None
             session.mode = MODE_CHOOSE_POINT
             await query.message.reply_text("Хорошо, выбираем точку заново.")
             await ask_points(update, context)

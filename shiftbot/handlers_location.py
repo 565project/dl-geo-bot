@@ -26,13 +26,14 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         except (TypeError, ValueError):
             return None
 
-    def retry_inline_keyboard() -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("📍 Отправить геопозицию", callback_data="send_location")],
-                [InlineKeyboardButton("🔁 Сменить точку", callback_data="change_point")],
-            ]
-        )
+    def retry_inline_keyboard(include_issue: bool = False) -> InlineKeyboardMarkup:
+        rows = [
+            [InlineKeyboardButton("📍 Отправить геопозицию", callback_data="send_location")],
+            [InlineKeyboardButton("🔁 Сменить точку", callback_data="change_point")],
+        ]
+        if include_issue:
+            rows.append([InlineKeyboardButton("🆘 Сообщить об ошибке", callback_data="report_issue")])
+        return InlineKeyboardMarkup(rows)
 
     def out_alert_keyboard() -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
@@ -174,36 +175,89 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
 
         point_lat = as_float(point.get("geo_lat"))
         point_lon = as_float(point.get("geo_lon"))
-        radius = as_float(point.get("geo_radius_m")) or float(config.DEFAULT_RADIUS_M)
+        base_radius = as_float(point.get("geo_radius_m")) or float(config.DEFAULT_RADIUS_M)
 
         if point_lat is None or point_lon is None:
             await status_message.edit_text("Не удалось определить координаты точки. Выберите другую точку.")
             return
 
-        if accuracy is None or accuracy > config.ACCURACY_MAX_M:
-            session.last_status = STATUS_UNKNOWN
-            session.last_distance_m = None
-            acc_text = f"{accuracy:.0f}" if accuracy is not None else "неизвестна"
-            await status_message.edit_text(
-                "⚠️ Не удаётся точно определить местоположение "
-                f"(точность {acc_text} м).\n"
-                "Включите GPS, выйдите на улицу, подождите 10–20 сек и отправьте трансляцию снова.",
-                reply_markup=retry_inline_keyboard(),
-            )
-            return
-
+        attempt = max(session.gate_attempt, 0)
+        effective_radius = base_radius + (attempt * config.GATE_RADIUS_STEP_M)
         dist_m = haversine_m(lat, lon, point_lat, point_lon)
         session.last_distance_m = dist_m
 
-        if dist_m > radius:
-            session.last_status = STATUS_OUT
+        logger.info(
+            "[GEO_GATE] staff_id=%s point_id=%s attempt=%s/%s user=(%.6f,%.6f) point=(%.6f,%.6f) dist=%.1fm "
+            "acc=%s acc_max=%s base_r=%.1f eff_r=%.1f",
+            session.user_id,
+            point.get("id"),
+            attempt + 1,
+            config.GATE_MAX_ATTEMPTS,
+            lat,
+            lon,
+            point_lat,
+            point_lon,
+            dist_m,
+            accuracy,
+            config.ACCURACY_MAX_M,
+            base_radius,
+            effective_radius,
+        )
+
+        if accuracy is None or accuracy > config.ACCURACY_MAX_M:
+            session.last_status = STATUS_UNKNOWN
+            session.gate_last_reason = "accuracy"
+            session.gate_attempt = min(session.gate_attempt + 1, config.GATE_MAX_ATTEMPTS)
+            logger.info("[GEO_GATE] result=UNKNOWN reason=accuracy")
+
+            acc_text = f"{accuracy:.0f}" if accuracy is not None else "неизвестна"
+            if session.gate_attempt < config.GATE_MAX_ATTEMPTS:
+                await status_message.edit_text(
+                    "⚠️ Не удаётся точно определить геопозицию "
+                    f"(точность {acc_text}м). Попытка {session.gate_attempt}/{config.GATE_MAX_ATTEMPTS}.\n"
+                    "Включите GPS, выйдите на улицу/к окну, подождите 10–20 сек и отправьте локацию ещё раз.\n\n"
+                    f"Диагностика: dist≈{dist_m:.0f}м, radius={effective_radius:.0f}м, acc={acc_text}м",
+                    reply_markup=retry_inline_keyboard(),
+                )
+                return
+
             await status_message.edit_text(
-                "❌ Мы не видим вас в рабочем радиусе точки.\n"
-                f"Сейчас: ≈{dist_m:.0f} м, допустимо {radius:.0f} м.\n"
-                "Включите GPS, подойдите ближе и отправьте трансляцию снова.",
+                f"❌ Не удалось подтвердить геопозицию за {config.GATE_MAX_ATTEMPTS} попыток.\n"
+                "1) Включите GPS\n"
+                "2) Отправьте трансляцию заново (8 часов)\n"
+                "3) Или нажмите 'Сменить точку' / обратитесь к администратору.\n\n"
+                f"Диагностика: dist≈{dist_m:.0f}м, radius={effective_radius:.0f}м, acc={acc_text}м",
                 reply_markup=retry_inline_keyboard(),
             )
             return
+
+        if dist_m > effective_radius:
+            session.last_status = STATUS_OUT
+            session.gate_last_reason = "distance"
+            session.gate_attempt = min(session.gate_attempt + 1, config.GATE_MAX_ATTEMPTS)
+            logger.info("[GEO_GATE] result=OUT")
+
+            if session.gate_attempt < config.GATE_MAX_ATTEMPTS:
+                await status_message.edit_text(
+                    "❌ Вы вне рабочей зоны: "
+                    f"≈{dist_m:.0f} м, допустимо сейчас {effective_radius:.0f} м (попытка {session.gate_attempt}/{config.GATE_MAX_ATTEMPTS}).\n"
+                    "Подойдите ближе к точке и отправьте локацию ещё раз.\n\n"
+                    f"Диагностика: dist≈{dist_m:.0f}м, radius={effective_radius:.0f}м, acc={accuracy:.0f}м",
+                    reply_markup=retry_inline_keyboard(),
+                )
+                return
+
+            await status_message.edit_text(
+                f"❌ Вы {config.GATE_MAX_ATTEMPTS} раз вне зоны. Проверьте, что выбрана правильная точка и отправляете трансляцию.\n"
+                "Нажмите 'Сменить точку' или 'Сообщить об ошибке'.\n\n"
+                f"Диагностика: dist≈{dist_m:.0f}м, radius={effective_radius:.0f}м, acc={accuracy:.0f}м",
+                reply_markup=retry_inline_keyboard(include_issue=True),
+            )
+            return
+
+        session.gate_attempt = 0
+        session.gate_last_reason = None
+        logger.info("[GEO_GATE] result=IN")
 
         payload = {
             "point_id": point.get("id"),
@@ -235,7 +289,7 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         session.active_point_name = point.get("short_name")
         session.active_point_lat = point_lat
         session.active_point_lon = point_lon
-        session.active_point_radius = radius
+        session.active_point_radius = base_radius
         session.active_role = session.selected_role
         session.active_started_at = datetime.now().strftime("%Y-%m-%d %H:%M")
         session.consecutive_out_count = 0
@@ -245,7 +299,7 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
 
         await status_message.edit_text(
             "✅ Вы в рабочей зоне "
-            f"(≈{dist_m:.0f} м, допустимо {radius:.0f} м).\n"
+            f"(≈{dist_m:.0f} м, допустимо {effective_radius:.0f} м).\n"
             "Смена начата. Удачной работы!"
         )
         await update.message.reply_text("Главное меню снова доступно ниже.", reply_markup=main_menu_keyboard())
