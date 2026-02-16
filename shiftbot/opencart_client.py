@@ -204,19 +204,27 @@ class OpenCartClient:
         self,
         *,
         shift_id: int,
-        staff_id: int,
+        staff_id: int | None = None,
+        telegram_id: int | None = None,
         lat: float,
         lon: float,
         acc: float | None = None,
+        status_fields: Optional[dict] = None,
     ) -> dict:
-        payload = {
-            "shift_id": str(shift_id),
-            "staff_id": str(staff_id),
-            "lat": str(lat),
-            "lon": str(lon),
-        }
+        payload = {"shift_id": str(shift_id), "lat": str(lat), "lon": str(lon)}
+        if staff_id is not None:
+            payload["staff_id"] = str(staff_id)
+        if telegram_id is not None:
+            payload["telegram_id"] = str(telegram_id)
         if acc is not None:
             payload["acc"] = str(acc)
+
+        for key, value in (status_fields or {}).items():
+            if key in {"ping_at", "timestamp"}:
+                continue
+            if value is None:
+                continue
+            payload[str(key)] = str(value)
 
         data = await self._request(
             "POST",
