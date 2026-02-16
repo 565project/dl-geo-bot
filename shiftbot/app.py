@@ -53,9 +53,7 @@ class ShiftBotApp:
         return f"+{digits}"
 
     async def _load_admin_chat_ids(self) -> list[int]:
-        admin_chat_ids: list[int] = list(config.ADMIN_CHAT_IDS)
-        if config.ADMIN_CHAT_ID > 0:
-            admin_chat_ids.append(config.ADMIN_CHAT_ID)
+        admin_chat_ids: list[int] = []
 
         for phone in config.ADMIN_PHONES:
             normalized_phone = self._normalize_admin_phone(phone)
@@ -85,7 +83,13 @@ class ShiftBotApp:
             admin_chat_ids.append(chat_id)
 
         deduped = sorted(set(admin_chat_ids))
-        self.logger.info("ADMIN_CHAT_IDS_LOADED admin_chat_ids=%s", deduped)
+        if deduped:
+            self.logger.info("ADMIN_CHAT_IDS_LOADED admin_chat_ids=%s", deduped)
+        else:
+            self.logger.warning(
+                "ADMIN_CHAT_IDS_EMPTY_FALLBACK_TO_STAFF enabled=1 phones=%s",
+                config.ADMIN_PHONES,
+            )
         return deduped
 
     async def _post_init(self, app: Application) -> None:
