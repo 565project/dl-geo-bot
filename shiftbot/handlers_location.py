@@ -12,6 +12,7 @@ from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS
 from shiftbot.opencart_client import ApiUnavailableError
 from shiftbot.ping_alerts import process_ping_alerts
 from shiftbot.violation_alerts import maybe_send_admin_notify_from_decision
+from shiftbot.admin_notify import notify_admin_hardcoded
 
 
 def build_location_handlers(session_store, staff_service, oc_client, dead_soul_detector, logger):
@@ -251,6 +252,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         if status == STATUS_UNKNOWN and (now - session.last_unknown_warn_ts) >= config.ALERT_COOLDOWN_OUT_SEC:
             session.last_unknown_warn_ts = now
             await message.reply_text("ℹ️ Не удалось определить статус GPS. Проверьте, что геолокация включена.")
+            await notify_admin_hardcoded(context, session, reason="UNKNOWN_WARN_AFTER_STAFF")
 
         sig = f"{round(lat, config.GPS_SIG_ROUND)}:{round(lon, config.GPS_SIG_ROUND)}"
         point_id = session.selected_point_id or session.active_point_id
