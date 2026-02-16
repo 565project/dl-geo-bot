@@ -66,6 +66,26 @@ class OpenCartClientPingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.get("error"), "temporary_api_error")
         self.assertEqual(response.get("decisions"), {})
 
+    async def test_violation_tick_sends_json_payload(self):
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["query"] = parse_qs(request.url.query.decode())
+            captured["headers"] = dict(request.headers)
+            captured["body"] = request.content.decode()
+            return httpx.Response(200, json={"ok": True})
+
+        client = OpenCartClient("https://example.com", "secret", DummyLogger())
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        self.addAsyncCleanup(client.aclose)
+
+        response = await client.violation_tick(17)
+
+        self.assertEqual(response, {"ok": True})
+        self.assertEqual(captured["query"]["route"], ["dl/geo_api/violation_tick"])
+        self.assertEqual(captured["headers"].get("content-type"), "application/json")
+        self.assertEqual(captured["body"], '{"shift_id":"17"}')
+
 
 if __name__ == "__main__":
     unittest.main()
