@@ -10,6 +10,7 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, Mes
 from shiftbot import config
 from shiftbot.guards import ensure_staff_active
 from shiftbot.models import MODE_AWAITING_LOCATION, MODE_CHOOSE_POINT, MODE_CHOOSE_ROLE, MODE_IDLE, MODE_REPORT_ISSUE
+from shiftbot.live_registry import LIVE_REGISTRY
 from shiftbot.opencart_client import ApiUnavailableError
 
 BTN_START_SHIFT = "✅ Начать смену"
@@ -151,14 +152,9 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
         return True
 
     async def get_admin_chat_id() -> int | None:
-        admin = await staff_service.get_staff_by_phone(config.ADMIN_PHONE)
-        if not admin:
+        if config.ADMIN_CHAT_ID <= 0:
             return None
-        chat_id = admin.get("telegram_chat_id")
-        try:
-            return int(chat_id) if chat_id is not None else None
-        except (TypeError, ValueError):
-            return None
+        return config.ADMIN_CHAT_ID
 
     async def start_report_issue_mode(msg, session) -> None:
         session.mode = MODE_REPORT_ISSUE
@@ -242,7 +238,8 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
             await msg.reply_text("Активной смены нет.", reply_markup=main_menu_keyboard())
             return
 
-        payload = {"shift_id": session.active_shift_id, "reason": "manual"}
+        active_shift_id = session.active_shift_id
+        payload = {"shift_id": active_shift_id, "reason": "manual"}
         try:
             result = await oc_client.shift_end(payload)
         except ApiUnavailableError:
@@ -255,6 +252,9 @@ def build_shift_handlers(session_store, staff_service, oc_client, logger):
         if result.get("ok") is False and result.get("error"):
             await msg.reply_text(f"Не удалось завершить смену: {result['error']}")
             return
+
+        if active_shift_id:
+            LIVE_REGISTRY.remove_shift(active_shift_id)
 
         session_store.clear_shift_state(session)
         reset_flow(session)

@@ -60,6 +60,8 @@ class SessionStore:
         session.last_distance_m = None
         session.last_accuracy_m = None
         session.out_streak = 0
+        session.last_bucket_key = None
+        session.same_bucket_hits = 0
         session.last_warn_ts = 0.0
         session.last_stale_notify_ts = 0.0
         session.gate_attempt = 0

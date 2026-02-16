@@ -49,6 +49,8 @@ class ShiftSession:
     last_notify_ts: float = 0.0
     last_valid_ping_ts: float = 0.0
     out_streak: int = 0
+    last_bucket_key: Optional[str] = None
+    same_bucket_hits: int = 0
     last_warn_ts: float = 0.0
     last_stale_notify_ts: float = 0.0
     last_lat: Optional[float] = None

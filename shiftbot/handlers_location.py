@@ -1,3 +1,4 @@
+import math
 import time
 import logging
 from datetime import datetime
@@ -7,6 +8,7 @@ from telegram.ext import ContextTypes, MessageHandler, filters
 
 from shiftbot import config
 from shiftbot.geo import haversine_m
+from shiftbot.live_registry import LIVE_REGISTRY
 from shiftbot import guards
 from shiftbot.guards import ensure_staff_active
 from shiftbot.handlers_shift import main_menu_keyboard
@@ -60,44 +62,14 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
             ]
         )
 
-    async def maybe_notify_admin(context, session, staff, dist_m: float, radius_m: float) -> None:
-        now = time.time()
-        if (now - session.last_admin_alert_at) < config.OUT_COOLDOWN_SEC:
+    async def maybe_notify_admin(context, text: str) -> None:
+        if config.ADMIN_CHAT_ID <= 0:
+            logger.warning("ADMIN_CHAT_ID_NOT_SET")
             return
-        session.last_admin_alert_at = now
-
-        admin = await staff_service.get_staff_by_phone(config.ADMIN_PHONE)
-        if not admin:
-            logger.warning("ADMIN_NOT_FOUND phone=%s", config.ADMIN_PHONE)
-            return
-
-        admin_chat_id = admin.get("telegram_chat_id")
-        if not admin_chat_id:
-            logger.warning("ADMIN_CHAT_ID_EMPTY phone=%s", config.ADMIN_PHONE)
-            return
-
-        full_name = (
-            staff.get("full_name")
-            or staff.get("name")
-            or staff.get("fio")
-            or f"user_id={session.user_id}"
-        )
-
-        await context.bot.send_message(
-            chat_id=int(admin_chat_id),
-            text=(
-                "🚨 Геоконтроль: сотрудник вне зоны 3 раза подряд\n"
-                f"ФИО: {full_name}\n"
-                f"Точка: {session.active_point_name or '—'}\n"
-                f"Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"Дистанция: ~{dist_m:.0f} м (радиус {radius_m:.0f} м)\n"
-                f"Shift ID: {session.active_shift_id or '—'}\n"
-                "Рекомендация: связаться с руководителем точки."
-            ),
-        )
+        await context.bot.send_message(chat_id=config.ADMIN_CHAT_ID, text=text)
 
     async def handle_active_shift_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE, session, location) -> None:
-        if session.active_point_lat is None or session.active_point_lon is None:
+        if session.active_point_lat is None or session.active_point_lon is None or not session.active_shift_id:
             return
 
         now = time.time()
@@ -116,64 +88,98 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         session.last_lon = lon
         session.last_acc = float(accuracy) if accuracy is not None else None
         session.last_dist_m = dist_m
-        session.same_gps_signature = f"{lat:.5f}:{lon:.5f}:{session.last_acc if session.last_acc is not None else 'na'}"
 
         if in_zone:
             session.last_status = STATUS_IN
             session.out_streak = 0
-            if session.consecutive_out_count > 0:
-                session.consecutive_out_count = 0
-                await update.message.reply_text("✅ Вы снова в рабочей зоне. Спасибо!")
+            session.consecutive_out_count = 0
         else:
             session.last_status = STATUS_OUT
             session.out_streak += 1
             session.consecutive_out_count = min(session.consecutive_out_count + 1, config.OUT_LIMIT)
 
-            if session.consecutive_out_count < config.OUT_LIMIT:
-                await update.message.reply_text(
-                    "⚠️ Вы вне рабочего радиуса точки "
-                    f"(≈{dist_m:.0f} м, допустимо {radius_m:.0f} м).\n"
-                    "Если это ошибка — включите GPS и продолжайте трансляцию."
+            if session.out_streak == config.OUT_STREAK_ALERT and (now - session.last_warn_ts) >= config.NOTIFY_COOLDOWN_SEC:
+                session.last_warn_ts = now
+                await update.message.reply_text("⚠️ Вы вне рабочей зоны, вернитесь на точку и проверьте Live Location.")
+
+                staff = await staff_service.get_staff(session.user_id)
+                staff_id = (staff or {}).get("staff_id") or "—"
+                await maybe_notify_admin(
+                    context,
+                    (
+                        "🚨 OUT streak alert\n"
+                        f"shift#{session.active_shift_id} staff#{staff_id}\n"
+                        f"point#{session.active_point_id or '—'} dist≈{dist_m:.0f}м r={radius_m:.0f}м\n"
+                        f"OUT подряд: {session.out_streak}"
+                    ),
                 )
-            else:
-                await update.message.reply_text(
-                    "❗️Вы 3 раза подряд вне рабочего радиуса.\n"
-                    "Вернитесь на точку или сообщите об ошибке администратору.",
-                    reply_markup=out_alert_keyboard(),
-                )
 
-                try:
-                    staff = await staff_service.get_staff(session.user_id)
-                    await maybe_notify_admin(context, session, staff or {}, dist_m, radius_m)
-                except Exception:
-                    logger.exception("ADMIN_NOTIFY_FAILED user=%s", session.user_id)
+        bucket = math.floor(now / config.GPS_BUCKET_SEC)
+        bucket_key = f"{round(lat, 5)}:{round(lon, 5)}:{bucket}"
+        if session.last_bucket_key == bucket_key:
+            session.same_bucket_hits += 1
+        else:
+            session.same_bucket_hits = 1
+            session.last_bucket_key = bucket_key
 
-        if (now - session.last_notify_ts) < config.PING_NOTIFY_EVERY_SEC:
-            return
-
-        session.last_notify_ts = now
-        zone_label = "IN" if in_zone else "OUT"
-        acc_text = f"{session.last_acc:.0f}" if session.last_acc is not None else "—"
-
-        notify_chat_id = None
-        try:
-            staff = await staff_service.get_staff(session.user_id)
-        except Exception:
-            logger.exception("PING_NOTIFY_STAFF_FETCH_FAILED user=%s", session.user_id)
-            staff = None
-
+        staff = await staff_service.get_staff(session.user_id)
+        staff_id = None
+        tg_user_id = None
         if staff:
-            notify_chat_id = staff.get("telegram_chat_id") or staff.get("telegram_user_id")
-        if not notify_chat_id:
-            notify_chat_id = session.chat_id or session.user_id
+            try:
+                staff_id = int(staff.get("staff_id")) if staff.get("staff_id") is not None else None
+            except (TypeError, ValueError):
+                staff_id = None
+            try:
+                tg_user_id = int(staff.get("telegram_user_id")) if staff.get("telegram_user_id") is not None else None
+            except (TypeError, ValueError):
+                tg_user_id = None
 
-        await context.bot.send_message(
-            chat_id=int(notify_chat_id),
-            text=(
-                f"📍 Ping: dist≈{dist_m:.0f}м / r={radius_m:.0f}м, "
-                f"acc={acc_text}, zone={zone_label}, out_streak={session.out_streak}"
-            ),
+        LIVE_REGISTRY.cleanup_stale(stale_timeout_sec=600, now_ts=now)
+        LIVE_REGISTRY.upsert_shift(
+            shift_id=session.active_shift_id,
+            staff_id=staff_id,
+            tg_user_id=tg_user_id,
+            point_id=session.active_point_id,
+            bucket_key=bucket_key,
+            now_ts=now,
         )
+
+        same_shifts = LIVE_REGISTRY.get_same_signature_shifts(session.active_shift_id, bucket_key)
+        touched_pairs: set[str] = set()
+
+        for other_shift_id, other_data in same_shifts:
+            pair_key, streak = LIVE_REGISTRY.touch_pair(session.active_shift_id, other_shift_id, bucket_key, now_ts=now)
+            touched_pairs.add(pair_key)
+            if streak < config.SAME_GPS_STREAK_ALERT:
+                continue
+            if not LIVE_REGISTRY.can_notify_pair(pair_key, config.NOTIFY_COOLDOWN_SEC, now_ts=now):
+                continue
+
+            me = LIVE_REGISTRY.get_shift(session.active_shift_id) or {}
+            await maybe_notify_admin(
+                context,
+                (
+                    "⚠️ Возможные мёртвые души: "
+                    f"shift#{session.active_shift_id} staff#{me.get('staff_id', '—')} "
+                    f"и shift#{other_shift_id} staff#{other_data.get('staff_id', '—')} "
+                    f"совпадают по GPS {streak} раз подряд, точка {session.active_point_id or '—'}"
+                ),
+            )
+
+        LIVE_REGISTRY.clear_shift_pairs_except(session.active_shift_id, touched_pairs)
+
+        if config.DEBUG_GPS_NOTIFY and (now - session.last_notify_ts) >= config.GPS_BUCKET_SEC:
+            session.last_notify_ts = now
+            zone_label = "IN" if in_zone else "OUT"
+            await maybe_notify_admin(
+                context,
+                (
+                    f"[DEBUG] shift#{session.active_shift_id} zone={zone_label} "
+                    f"dist≈{dist_m:.0f}м r={radius_m:.0f}м out_streak={session.out_streak} "
+                    f"same_bucket_hits={session.same_bucket_hits}"
+                ),
+            )
 
     async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or not update.message.location:
@@ -444,6 +450,8 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         session.active_started_at = datetime.now().strftime("%Y-%m-%d %H:%M")
         session.consecutive_out_count = 0
         session.out_streak = 0
+        session.last_bucket_key = None
+        session.same_bucket_hits = 0
         session.last_ping_ts = 0.0
         session.last_notify_ts = 0.0
         session.last_lat = None
