@@ -46,10 +46,16 @@ class ShiftSession:
 
     # legacy/runtime геополей для статуса и фоновых задач
     last_ping_ts: float = 0.0
+    last_notify_ts: float = 0.0
     last_valid_ping_ts: float = 0.0
     out_streak: int = 0
     last_warn_ts: float = 0.0
     last_stale_notify_ts: float = 0.0
+    last_lat: Optional[float] = None
+    last_lon: Optional[float] = None
+    last_acc: Optional[float] = None
+    last_dist_m: Optional[float] = None
+    same_gps_signature: Optional[str] = None
     last_distance_m: Optional[float] = None
     last_accuracy_m: Optional[float] = None
     last_status: str = STATUS_IDLE
