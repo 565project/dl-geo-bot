@@ -28,6 +28,7 @@ ENABLE_STALE_CHECK = os.getenv("ENABLE_STALE_CHECK", "1") not in {"0", "false", 
 STALE_CHECK_EVERY_SEC = int(os.getenv("STALE_CHECK_EVERY_SEC", "30"))
 STALE_AFTER_SEC = int(os.getenv("STALE_AFTER_SEC", "90"))
 STALE_NOTIFY_COOLDOWN_SEC = int(os.getenv("STALE_NOTIFY_COOLDOWN_SEC", "180"))
+PING_NOTIFY_EVERY_SEC = int(os.getenv("PING_NOTIFY_EVERY_SEC", "15"))
 
 STAFF_CACHE_TTL_SEC = int(os.getenv("STAFF_CACHE_TTL_SEC", "30"))
 HTTP_TIMEOUT_SEC = int(os.getenv("HTTP_TIMEOUT_SEC", "10"))

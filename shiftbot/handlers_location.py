@@ -10,7 +10,7 @@ from shiftbot.geo import haversine_m
 from shiftbot import guards
 from shiftbot.guards import ensure_staff_active
 from shiftbot.handlers_shift import main_menu_keyboard
-from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS_OUT, STATUS_UNKNOWN
+from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS_OUT
 
 
 def build_location_handlers(session_store, staff_service, oc_client, logger):
@@ -89,57 +89,76 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         lat = location.latitude
         lon = location.longitude
         accuracy = getattr(location, "horizontal_accuracy", None)
-
-        session.last_ping_ts = now
-        session.last_accuracy_m = float(accuracy) if accuracy is not None else None
-
-        if accuracy is None or accuracy > config.ACCURACY_MAX_M:
-            session.last_status = STATUS_UNKNOWN
-            session.last_distance_m = None
-            if (now - session.last_out_warn_at) >= config.OUT_COOLDOWN_SEC:
-                session.last_out_warn_at = now
-                acc_text = f"{accuracy:.0f}" if accuracy is not None else "неизвестна"
-                await update.message.reply_text(
-                    "⚠️ Слабый GPS сигнал "
-                    f"(точность {acc_text} м). Проверьте GPS/выйдите к окну/на улицу."
-                )
-            return
-
         dist_m = haversine_m(lat, lon, session.active_point_lat, session.active_point_lon)
         radius_m = session.active_point_radius or float(config.DEFAULT_RADIUS_M)
+        in_zone = dist_m <= radius_m
 
+        session.last_ping_ts = now
         session.last_distance_m = dist_m
+        session.last_accuracy_m = float(accuracy) if accuracy is not None else None
         session.last_valid_ping_ts = now
+        session.last_lat = lat
+        session.last_lon = lon
+        session.last_acc = float(accuracy) if accuracy is not None else None
+        session.last_dist_m = dist_m
+        session.same_gps_signature = f"{lat:.5f}:{lon:.5f}:{session.last_acc if session.last_acc is not None else 'na'}"
 
-        if dist_m <= radius_m:
+        if in_zone:
             session.last_status = STATUS_IN
+            session.out_streak = 0
             if session.consecutive_out_count > 0:
                 session.consecutive_out_count = 0
                 await update.message.reply_text("✅ Вы снова в рабочей зоне. Спасибо!")
+        else:
+            session.last_status = STATUS_OUT
+            session.out_streak += 1
+            session.consecutive_out_count = min(session.consecutive_out_count + 1, config.OUT_LIMIT)
+
+            if session.consecutive_out_count < config.OUT_LIMIT:
+                await update.message.reply_text(
+                    "⚠️ Вы вне рабочего радиуса точки "
+                    f"(≈{dist_m:.0f} м, допустимо {radius_m:.0f} м).\n"
+                    "Если это ошибка — включите GPS и продолжайте трансляцию."
+                )
+            else:
+                await update.message.reply_text(
+                    "❗️Вы 3 раза подряд вне рабочего радиуса.\n"
+                    "Вернитесь на точку или сообщите об ошибке администратору.",
+                    reply_markup=out_alert_keyboard(),
+                )
+
+                try:
+                    staff = await staff_service.get_staff(session.user_id)
+                    await maybe_notify_admin(context, session, staff or {}, dist_m, radius_m)
+                except Exception:
+                    logger.exception("ADMIN_NOTIFY_FAILED user=%s", session.user_id)
+
+        if (now - session.last_notify_ts) < config.PING_NOTIFY_EVERY_SEC:
             return
 
-        session.last_status = STATUS_OUT
-        session.consecutive_out_count = min(session.consecutive_out_count + 1, config.OUT_LIMIT)
+        session.last_notify_ts = now
+        zone_label = "IN" if in_zone else "OUT"
+        acc_text = f"{session.last_acc:.0f}" if session.last_acc is not None else "—"
 
-        if session.consecutive_out_count < config.OUT_LIMIT:
-            await update.message.reply_text(
-                "⚠️ Вы вне рабочего радиуса точки "
-                f"(≈{dist_m:.0f} м, допустимо {radius_m:.0f} м).\n"
-                "Если это ошибка — включите GPS и продолжайте трансляцию."
-            )
-            return
-
-        await update.message.reply_text(
-            "❗️Вы 3 раза подряд вне рабочего радиуса.\n"
-            "Вернитесь на точку или сообщите об ошибке администратору.",
-            reply_markup=out_alert_keyboard(),
-        )
-
+        notify_chat_id = None
         try:
             staff = await staff_service.get_staff(session.user_id)
-            await maybe_notify_admin(context, session, staff or {}, dist_m, radius_m)
         except Exception:
-            logger.exception("ADMIN_NOTIFY_FAILED user=%s", session.user_id)
+            logger.exception("PING_NOTIFY_STAFF_FETCH_FAILED user=%s", session.user_id)
+            staff = None
+
+        if staff:
+            notify_chat_id = staff.get("telegram_chat_id") or staff.get("telegram_user_id")
+        if not notify_chat_id:
+            notify_chat_id = session.chat_id or session.user_id
+
+        await context.bot.send_message(
+            chat_id=int(notify_chat_id),
+            text=(
+                f"📍 Ping: dist≈{dist_m:.0f}м / r={radius_m:.0f}м, "
+                f"acc={acc_text}, zone={zone_label}, out_streak={session.out_streak}"
+            ),
+        )
 
     async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or not update.message.location:
@@ -378,6 +397,14 @@ def build_location_handlers(session_store, staff_service, oc_client, logger):
         session.active_role = session.selected_role
         session.active_started_at = datetime.now().strftime("%Y-%m-%d %H:%M")
         session.consecutive_out_count = 0
+        session.out_streak = 0
+        session.last_ping_ts = 0.0
+        session.last_notify_ts = 0.0
+        session.last_lat = None
+        session.last_lon = None
+        session.last_acc = None
+        session.last_dist_m = None
+        session.same_gps_signature = None
         session.last_out_warn_at = 0.0
         session.last_admin_alert_at = 0.0
         session.mode = MODE_IDLE

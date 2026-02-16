@@ -50,7 +50,13 @@ class SessionStore:
         session.last_status = STATUS_IDLE
         session.last_notified_status = STATUS_IDLE
         session.last_ping_ts = 0.0
+        session.last_notify_ts = 0.0
         session.last_valid_ping_ts = 0.0
+        session.last_lat = None
+        session.last_lon = None
+        session.last_acc = None
+        session.last_dist_m = None
+        session.same_gps_signature = None
         session.last_distance_m = None
         session.last_accuracy_m = None
         session.out_streak = 0
