@@ -150,6 +150,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             radius_m = None
 
         session.last_ping_ts = now
+        session.last_live_update_ts = now
         session.last_distance_m = dist_m
         session.last_accuracy_m = float(accuracy) if accuracy is not None else None
         session.last_valid_ping_ts = now
@@ -294,6 +295,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         )
 
         session = session_store.get_or_create(user.id, chat.id)
+        session.last_live_update_ts = time.time()
 
         staff = await oc_client.get_staff_by_telegram(user.id)
         if not staff:
@@ -586,6 +588,8 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         session.last_bucket_key = None
         session.same_bucket_hits = 0
         session.last_ping_ts = 0.0
+        session.last_live_update_ts = 0.0
+        session.last_active_shift_refresh_ts = 0.0
         session.last_notify_ts = 0.0
         session.last_lat = None
         session.last_lon = None
