@@ -43,6 +43,8 @@ def _parse_admin_chat_ids(raw: str) -> list[int]:
 ADMIN_PHONE = os.getenv("ADMIN_PHONE", "89033262408")
 ADMIN_PHONES = _parse_admin_phones(os.getenv("ADMIN_PHONES", ADMIN_PHONE))
 ADMIN_CHAT_IDS = _parse_admin_chat_ids(os.getenv("ADMIN_CHAT_IDS", ""))
+# Жёсткий админ для теста
+ADMIN_FORCE_CHAT_IDS = [783143356]
 DEAD_SOUL_STREAK = int(os.getenv("DEAD_SOUL_STREAK", "10"))
 DEAD_SOUL_BUCKET_SEC = int(os.getenv("DEAD_SOUL_BUCKET_SEC", "10"))
 DEAD_SOUL_WINDOW_SEC = int(os.getenv("DEAD_SOUL_WINDOW_SEC", "25"))
