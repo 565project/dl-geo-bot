@@ -339,8 +339,55 @@ class OpenCartClient:
             "POST",
             params={"route": "dl/geo_api/register"},
             data=payload,
+            return_meta=True,
         )
-        return data if isinstance(data, dict) else {"error": "Некорректный ответ API"}
+
+        if not isinstance(data, dict):
+            return {"ok": False, "staff": None, "inactive": False, "error": "Некорректный ответ API"}
+
+        status = int(data.get("status") or 0)
+        body = data.get("json") if isinstance(data.get("json"), dict) else {}
+
+        if data.get("success") is False:
+            error = body.get("error") if isinstance(body.get("error"), str) else "api_error"
+            return {
+                "ok": False,
+                "staff": None,
+                "inactive": False,
+                "error": error,
+                "status": status,
+            }
+
+        if not body:
+            return {"ok": False, "staff": None, "inactive": False, "error": "Некорректный ответ API", "status": status}
+
+        if body.get("ok") is False:
+            error = body.get("error") if isinstance(body.get("error"), str) else "api_error"
+            return {
+                "ok": False,
+                "staff": None,
+                "inactive": False,
+                "error": error,
+                "status": status,
+            }
+
+        staff = body.get("staff") if isinstance(body.get("staff"), dict) else None
+        if staff is None:
+            staff = {
+                "staff_id": body.get("staff_id"),
+                "is_active": body.get("is_active"),
+                "status": body.get("status"),
+            }
+
+        inactive = int(staff.get("is_active", body.get("is_active", 0)) or 0) == 0
+        return {
+            "ok": True,
+            "staff": staff,
+            "inactive": inactive,
+            "error": None,
+            "status": status,
+            "staff_id": staff.get("staff_id") or body.get("staff_id"),
+        }
 
     async def get_admin_chat_ids(self) -> list[int]:
         """Fetch admin chat IDs from API. Caches result for 60 seconds.

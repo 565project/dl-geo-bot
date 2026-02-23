@@ -280,21 +280,24 @@ def build_registration_handler(staff_service, oc_client, logger) -> Conversation
             context.user_data.pop("reg", None)
             return ConversationHandler.END
 
-        if result.get("error"):
-            logger.info("REG_FAIL user=%s reason=%s", user.id, result.get("error"))
-            await query.message.reply_text(f"Регистрация не завершена: {result.get('error')}")
+        if not result.get("ok"):
+            error = result.get("error") or "api_error"
+            logger.warning("REG_FAIL user=%s reason=%s payload=%s", user.id, error, result)
+            await query.message.reply_text("Не удалось сохранить данные, попробуйте ещё раз позже.")
             context.user_data.pop("reg", None)
             return ConversationHandler.END
 
-        is_active = int(result.get("is_active", 0))
+        staff = result.get("staff") if isinstance(result.get("staff"), dict) else {}
+        inactive = bool(result.get("inactive"))
+        staff_id = staff.get("staff_id") or result.get("staff_id")
         staff_service.cache.invalidate(user.id)
 
-        if is_active == 1:
-            logger.info("REG_DONE user=%s staff_id=%s", user.id, result.get("staff_id"))
+        if not inactive:
+            logger.info("REG_DONE user=%s staff_id=%s", user.id, staff_id)
             await show_main_menu(update, context, "Спасибо за регистрацию! ✅ Выберите действие:")
         else:
-            logger.info("REG_DONE user=%s staff_id=%s inactive=1", user.id, result.get("staff_id"))
-            await query.message.reply_text(inactive_staff_text(result))
+            logger.info("REG_DONE user=%s staff_id=%s inactive=1", user.id, staff_id)
+            await query.message.reply_text(inactive_staff_text(staff))
 
         context.user_data.pop("reg", None)
         return ConversationHandler.END
