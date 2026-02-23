@@ -43,14 +43,20 @@ async def notify_admins(
             return False
 
     # Resolve admin chat IDs via API (with cache + fallback)
+    configured_chat_ids = app.bot_data.get("admin_chat_ids")
+    if isinstance(configured_chat_ids, list) and configured_chat_ids:
+        chat_ids = [int(v) for v in configured_chat_ids if str(v).isdigit() and int(v) > 0]
+    else:
+        chat_ids = []
+
     oc_client = app.bot_data.get("oc_client")
-    if oc_client is not None:
+    if oc_client is not None and not chat_ids:
         try:
             chat_ids = await oc_client.get_admin_chat_ids()
         except Exception as exc:
             logger.warning("NOTIFY_ADMINS_GET_IDS_FAILED error=%s, using fallback", exc)
             chat_ids = list(config.ADMIN_FORCE_CHAT_IDS)
-    else:
+    elif not chat_ids:
         chat_ids = list(config.ADMIN_FORCE_CHAT_IDS)
 
     if not chat_ids:

@@ -9,6 +9,18 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", BOT_TOKEN_DEFAULT)
 OC_API_BASE = os.getenv("OC_API_BASE", OC_API_BASE_DEFAULT)
 OC_API_KEY = os.getenv("OC_API_KEY", OC_API_KEY_DEFAULT)
 
+
+def _default_admin_base(base_url: str) -> str:
+    normalized = str(base_url or "").rstrip("/")
+    if normalized.endswith("/index.php"):
+        normalized = normalized[: -len("/index.php")]
+    if normalized.endswith("/admin"):
+        return f"{normalized}/index.php"
+    return f"{normalized}/admin/index.php" if normalized else ""
+
+
+OC_API_ADMIN_BASE = os.getenv("OC_API_ADMIN_BASE", _default_admin_base(OC_API_BASE))
+
 POINT_LAT = float(os.getenv("POINT_LAT", "56.628495"))
 POINT_LON = float(os.getenv("POINT_LON", "47.894357"))
 
@@ -44,7 +56,7 @@ ADMIN_PHONE = os.getenv("ADMIN_PHONE", "89033262408")
 ADMIN_PHONES = _parse_admin_phones(os.getenv("ADMIN_PHONES", ADMIN_PHONE))
 ADMIN_CHAT_IDS = _parse_admin_chat_ids(os.getenv("ADMIN_CHAT_IDS", ""))
 # Жёсткий админ для теста
-ADMIN_FORCE_CHAT_IDS = [783143356]
+ADMIN_FORCE_CHAT_IDS = _parse_admin_chat_ids(os.getenv("ADMIN_FORCE_CHAT_IDS", "783143356"))
 DEAD_SOUL_STREAK = int(os.getenv("DEAD_SOUL_STREAK", "10"))
 DEAD_SOUL_BUCKET_SEC = int(os.getenv("DEAD_SOUL_BUCKET_SEC", "10"))
 DEAD_SOUL_WINDOW_SEC = int(os.getenv("DEAD_SOUL_WINDOW_SEC", "25"))
