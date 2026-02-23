@@ -21,6 +21,8 @@ BTN_REPORT_ERROR = "🐞 Сообщить об ошибке"
 BTN_RESTART = "🔄 Рестарт"
 BTN_SEND_LOCATION = "📍 Отправить геопозицию"
 
+UNKNOWN_ACC_STATE_KEY = "unknown_acc_state_by_shift"
+
 ROLE_LABELS = {
     "baker": "Повар",
     "cashier": "Кассир",
@@ -269,6 +271,9 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
         if active_shift_id:
             LIVE_REGISTRY.remove_shift(active_shift_id)
             dead_soul_detector.remove_shift(active_shift_id)
+            unknown_by_shift = context.application.bot_data.get(UNKNOWN_ACC_STATE_KEY)
+            if isinstance(unknown_by_shift, dict):
+                unknown_by_shift.pop(int(active_shift_id), None)
         session_store.clear_shift_state(session)
         reset_flow(session)
         await msg.reply_text("Смена завершена", reply_markup=main_menu_keyboard())

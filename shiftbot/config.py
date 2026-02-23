@@ -57,7 +57,8 @@ ADMIN_PHONES = _parse_admin_phones(os.getenv("ADMIN_PHONES", ADMIN_PHONE))
 ADMIN_CHAT_IDS = _parse_admin_chat_ids(os.getenv("ADMIN_CHAT_IDS", ""))
 # Жёсткий админ для теста
 ADMIN_FORCE_CHAT_IDS = _parse_admin_chat_ids(os.getenv("ADMIN_FORCE_CHAT_IDS", "783143356"))
-DEAD_SOUL_STREAK = int(os.getenv("DEAD_SOUL_STREAK", "10"))
+# Подозрение на "мёртвые души": админ-алерт только после 5 подряд совпадений.
+DEAD_SOUL_STREAK = int(os.getenv("DEAD_SOUL_STREAK", "5"))
 DEAD_SOUL_BUCKET_SEC = int(os.getenv("DEAD_SOUL_BUCKET_SEC", "10"))
 DEAD_SOUL_WINDOW_SEC = int(os.getenv("DEAD_SOUL_WINDOW_SEC", "25"))
 GPS_SIG_ROUND = int(os.getenv("GPS_SIG_ROUND", "5"))

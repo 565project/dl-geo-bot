@@ -66,6 +66,7 @@ class PingAlertsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Точка: 29 (Пекарня на Ленина)", text)
         self.assertIn("• Иванов Иван Иванович — baker", text)
         self.assertIn("• Петров Петр Петрович — cashier", text)
+        self.assertIn("5 раз подряд отправлены одинаковые координаты", text)
         self.assertNotIn("chat_id=777", str(context.bot.messages))
 
     async def test_admin_same_location_2_fallback_to_single_staff(self):
@@ -96,6 +97,7 @@ class PingAlertsTests(unittest.IsolatedAsyncioTestCase):
         text = context.bot.messages[0]["text"]
         self.assertIn("Точка: 42", text)
         self.assertIn("• Сидоров Сидор Сидорович", text)
+        self.assertIn("5 раз подряд отправлены одинаковые координаты", text)
 
 
 if __name__ == "__main__":

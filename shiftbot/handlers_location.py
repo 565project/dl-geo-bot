@@ -15,6 +15,42 @@ from shiftbot.ping_alerts import process_ping_alerts
 from shiftbot.violation_alerts import maybe_send_admin_notify_from_decision
 from shiftbot.admin_notify import notify_admins
 
+UNKNOWN_ACC_STATE_KEY = "unknown_acc_state_by_shift"
+UNKNOWN_ACC_STREAK_PER_ROUND = 3
+
+
+def _as_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_unknown_acc_state(app, shift_id: int) -> dict:
+    state_by_shift = app.bot_data.setdefault(UNKNOWN_ACC_STATE_KEY, {})
+    return state_by_shift.setdefault(int(shift_id), {"unknown_streak": 0, "unknown_rounds": 0, "auto_end_sent": False})
+
+
+def _clear_unknown_acc_state(app, shift_id: int | None) -> None:
+    shift_id_value = _as_int(shift_id)
+    if shift_id_value is None:
+        return
+    state_by_shift = app.bot_data.get(UNKNOWN_ACC_STATE_KEY)
+    if isinstance(state_by_shift, dict):
+        state_by_shift.pop(shift_id_value, None)
+
+
+def _reset_unknown_streak(app, shift_id: int | None) -> None:
+    shift_id_value = _as_int(shift_id)
+    if shift_id_value is None:
+        return
+    state_by_shift = app.bot_data.get(UNKNOWN_ACC_STATE_KEY)
+    if not isinstance(state_by_shift, dict):
+        return
+    state = state_by_shift.get(shift_id_value)
+    if isinstance(state, dict):
+        state["unknown_streak"] = 0
+
 
 def build_location_handlers(session_store, staff_service, oc_client, dead_soul_detector, logger):
     role_map = {
@@ -166,20 +202,22 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             logger=logger,
         )
 
-        await maybe_send_admin_notify_from_decision(
-            context=context,
-            response=response,
-            shift_id=session.active_shift_id,
-            logger=logger,
-            staff_name=session.active_staff_name,
-            point_id=session.active_point_id,
-            last_ping_ts=session.last_ping_ts,
-        )
-
         status = str(response.get("status") or "").upper() or STATUS_UNKNOWN
         out_streak = as_int(response.get("out_streak")) or 0
         out_rounds = as_int(response.get("out_violation_rounds")) or 0
-        reason = response.get("reason")
+        reason = str(response.get("reason") or "")
+        is_unknown_acc = status == STATUS_UNKNOWN and reason == "acc_too_high"
+
+        if not is_unknown_acc:
+            await maybe_send_admin_notify_from_decision(
+                context=context,
+                response=response,
+                shift_id=session.active_shift_id,
+                logger=logger,
+                staff_name=session.active_staff_name,
+                point_id=session.active_point_id,
+                last_ping_ts=session.last_ping_ts,
+            )
         logger.info(
             "PING_ADD shift_id=%s staff_id=%s -> status=%s reason=%s out_streak=%s rounds=%s",
             session.active_shift_id,
@@ -248,6 +286,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
                     if auto_stopped:
                         LIVE_REGISTRY.remove_shift(shift_id_to_stop)
                         dead_soul_detector.remove_shift(shift_id_to_stop)
+                        _clear_unknown_acc_state(context.application, shift_id_to_stop)
                         session_store.clear_shift_state(session)
                         await message.reply_text(
                             "🔴 Ваша смена завершена автоматически.\n"
@@ -264,22 +303,84 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
                     )
                     await notify_admins(context, admin_text, shift_id=shift_id_to_stop)
 
-        if status == STATUS_UNKNOWN and (now - session.last_unknown_warn_ts) >= config.ALERT_COOLDOWN_OUT_SEC:
-            session.last_unknown_warn_ts = now
-            await message.reply_text("ℹ️ Не удалось определить статус GPS. Проверьте, что геолокация включена.")
-            unknown_admin_text = (
-                f"❓ Неизвестный статус GPS\n"
-                f"shift_id: {session.active_shift_id or '—'}\n"
-                f"staff: {session.active_staff_name or session.user_id}\n"
-                f"point_id: {session.active_point_id or '—'}"
-            )
-            await notify_admins(
-                context,
-                unknown_admin_text,
-                shift_id=session.active_shift_id,
-                cooldown_key="unknown_warn",
+        if is_unknown_acc:
+            unknown_state = _get_unknown_acc_state(context.application, session.active_shift_id)
+            unknown_state["unknown_streak"] = int(unknown_state.get("unknown_streak") or 0) + 1
+
+            if unknown_state["unknown_streak"] >= UNKNOWN_ACC_STREAK_PER_ROUND:
+                unknown_state["unknown_rounds"] = int(unknown_state.get("unknown_rounds") or 0) + 1
+                unknown_state["unknown_streak"] = 0
+
+            logger.info(
+                "UNKNOWN_ACC shift_id=%s staff_id=%s unknown_streak=%s unknown_rounds=%s",
+                session.active_shift_id,
+                staff_id,
+                unknown_state["unknown_streak"],
+                unknown_state["unknown_rounds"],
             )
 
+            if unknown_state["unknown_rounds"] == 1:
+                logger.info(
+                    "UNKNOWN_ACC_ROUND shift_id=%s staff_id=%s round=1 action=warn_staff_only",
+                    session.active_shift_id,
+                    staff_id,
+                )
+                await message.reply_text(
+                    "⚠️ Локация определяется слишком неточно, пинги могут быть некорректны. "
+                    "Проверьте GPS/интернет."
+                )
+            elif unknown_state["unknown_rounds"] == 2 and not unknown_state.get("auto_end_sent"):
+                unknown_state["auto_end_sent"] = True
+                logger.info(
+                    "UNKNOWN_ACC_ROUND shift_id=%s staff_id=%s round=2 action=admin_alert_and_auto_shift_end",
+                    session.active_shift_id,
+                    staff_id,
+                )
+
+                shift_id_to_stop = session.active_shift_id
+                auto_stopped = False
+                try:
+                    stop_result = await oc_client.shift_end(
+                        {"shift_id": shift_id_to_stop, "end_reason": "auto_end_unknown_location"}
+                    )
+                    auto_stopped = not (stop_result.get("ok") is False and stop_result.get("error"))
+                    logger.info(
+                        "AUTO_STOP_SHIFT shift_id=%s reason=unknown_acc_rounds=%s result=%s",
+                        shift_id_to_stop,
+                        unknown_state["unknown_rounds"],
+                        stop_result,
+                    )
+                except Exception as exc:
+                    logger.error("AUTO_STOP_SHIFT_FAILED shift_id=%s error=%s", shift_id_to_stop, exc)
+
+                unknown_admin_text = (
+                    "🚨 Долгая неточная геолокация (UNKNOWN/acc_too_high).\n"
+                    f"shift#{shift_id_to_stop} staff#{staff_id} point#{session.active_point_id or '—'}\n"
+                    f"unknown_rounds={unknown_state['unknown_rounds']}\n"
+                    + (
+                        "✅ Смена завершена автоматически."
+                        if auto_stopped
+                        else "❗ Автозавершение не удалось — требуется ручная проверка."
+                    )
+                )
+                await notify_admins(
+                    context,
+                    unknown_admin_text,
+                    shift_id=shift_id_to_stop,
+                    cooldown_key="unknown_warn",
+                )
+
+                if auto_stopped:
+                    LIVE_REGISTRY.remove_shift(shift_id_to_stop)
+                    dead_soul_detector.remove_shift(shift_id_to_stop)
+                    _clear_unknown_acc_state(context.application, shift_id_to_stop)
+                    session_store.clear_shift_state(session)
+                    await message.reply_text(
+                        "🔴 Смена завершена автоматически: долгое время позиция определяется слишком неточно.",
+                        reply_markup=main_menu_keyboard(),
+                    )
+        elif status in {STATUS_IN, STATUS_OUT}:
+            _reset_unknown_streak(context.application, session.active_shift_id)
         sig = f"{round(lat, config.GPS_SIG_ROUND)}:{round(lon, config.GPS_SIG_ROUND)}"
         point_id = session.selected_point_id or session.active_point_id
         alerts = dead_soul_detector.register_ping(
@@ -290,10 +391,18 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             now_ts=now,
         )
         for alert in alerts:
+            logger.info(
+                "SAME_LOCATION_STREAK shift_id=%s staff_id=%s other_staff_id=%s streak=%s threshold=%s",
+                session.active_shift_id,
+                alert["staff_a"],
+                alert["staff_b"],
+                alert.get("streak"),
+                config.DEAD_SOUL_STREAK,
+            )
             await notify_admins(
                 context,
                 (
-                    "🚨 Мёртвые души: 10 совпадений подряд GPS. "
+                    "🚨 Мёртвые души: 5 совпадений подряд GPS. "
                     f"staffA={alert['staff_a']} staffB={alert['staff_b']} "
                     f"точка={alert['point_id'] or '—'} sig={alert['sig']}"
                 ),
@@ -629,6 +738,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         session.last_out_violation_notified_round = 0
         session.last_unknown_warn_ts = 0.0
         session.mode = MODE_IDLE
+        _clear_unknown_acc_state(context.application, session.active_shift_id)
 
         success_message = (
             "✅ Вы в рабочей зоне "
