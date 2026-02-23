@@ -119,6 +119,8 @@ class ShiftBotApp:
             self.logger.warning("OC_API_HEALTH_CHECK_FAILED error=%s", exc)
 
         self.admin_chat_ids = await self.oc_client.get_admin_chat_ids()
+        if not self.admin_chat_ids:
+            self.logger.warning("ADMIN_CHAT_IDS_EMPTY")
         app.bot_data["admin_chat_ids"] = self.admin_chat_ids
         app.bot_data["oc_client"] = self.oc_client
         app.bot_data.setdefault(ADMIN_NOTIFY_COOLDOWN_KEY, {})
