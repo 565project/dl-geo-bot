@@ -79,6 +79,23 @@ def _admin_chat_ids_from_alert(alert: dict) -> list[int]:
     return sorted(set(values))
 
 
+def _admin_chat_ids_from_app(context: ContextTypes.DEFAULT_TYPE) -> list[int]:
+    app = getattr(context, "application", None)
+    if app is None:
+        return []
+
+    raw = app.bot_data.get("admin_chat_ids")
+    if not isinstance(raw, list):
+        return []
+
+    values = []
+    for chat_id in raw:
+        value = _as_int(chat_id)
+        if isinstance(value, int) and value > 0:
+            values.append(value)
+    return sorted(set(values))
+
+
 async def process_ping_alerts(
     *,
     response: dict,
@@ -121,9 +138,17 @@ async def process_ping_alerts(
 
         if admin_text:
             admin_chat_ids = _admin_chat_ids_from_alert(raw_alert)
+            if not admin_chat_ids and alert_type.startswith("admin_same_location_"):
+                admin_chat_ids = _admin_chat_ids_from_app(context)
             if not admin_chat_ids:
                 logger.error("ADMIN_CHAT_IDS_EMPTY_FOR_ALERT shift_id=%s alert_type=%s", shift_id, alert_type)
                 continue
             for admin_chat_id in admin_chat_ids:
                 await context.bot.send_message(chat_id=admin_chat_id, text=admin_text)
+            logger.info(
+                "ADMIN_ALERT_SENT shift_id=%s alert_type=%s admin_chat_ids=%s",
+                shift_id,
+                alert_type,
+                admin_chat_ids,
+            )
             cooldowns[cooldown_key] = now
