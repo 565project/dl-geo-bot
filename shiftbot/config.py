@@ -2,7 +2,7 @@ import os
 
 # Тестовые значения (могут быть переопределены через env)
 BOT_TOKEN_DEFAULT = "8105246434:AAH-6lBOMulCmgGoKlsFNVNftV6mYRh8K1Q"
-OC_API_BASE_DEFAULT = "http://100.121.213.12/index.php"
+OC_API_BASE_DEFAULT = "http://100.121.213.12:8080/index.php"
 OC_API_KEY_DEFAULT = "fd34635cd94a789b50dfce3373b0ba78"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", BOT_TOKEN_DEFAULT)
