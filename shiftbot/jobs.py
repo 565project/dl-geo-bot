@@ -138,12 +138,7 @@ def build_job_check_stale(session_store, oc_client, logger):
                     f"point_id: {session.active_point_id or '—'}\n"
                     f"last_seen: {round(age, 0):.0f}s назад"
                 )
-                await notify_admins(
-                    context,
-                    stale_admin_text,
-                    shift_id=session.active_shift_id,
-                    cooldown_key="stale_warn",
-                )
+                logger.info("STALE_WARN_SUPPRESSED text=%s", stale_admin_text.replace("\n", " | "))
 
                 await _refresh_active_shift_if_needed(session, now)
 

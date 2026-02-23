@@ -86,6 +86,63 @@ class OpenCartClientPingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["headers"].get("content-type"), "application/json")
         self.assertEqual(captured["body"], '{"shift_id":17}')
 
+    async def test_get_admin_chat_ids_retries_admin_endpoint_on_404(self):
+        calls = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(str(request.url))
+            if request.url.path.endswith("/index.php") and not request.url.path.endswith("/admin/index.php"):
+                return httpx.Response(404, json={"error": "not_found"})
+            return httpx.Response(200, json={"ok": True, "chat_ids": [101, "202"]})
+
+        client = OpenCartClient("https://example.com", "secret", DummyLogger())
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        self.addAsyncCleanup(client.aclose)
+
+        result = await client.get_admin_chat_ids()
+
+        self.assertEqual(result, [101, 202])
+        self.assertEqual(len(calls), 2)
+        self.assertIn("/index.php", calls[0])
+        self.assertIn("/admin/index.php", calls[1])
+
+    async def test_get_admin_chat_ids_fallback_on_non_json_error(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(403, text="forbidden")
+
+        client = OpenCartClient("https://example.com", "secret", DummyLogger())
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        self.addAsyncCleanup(client.aclose)
+
+        result = await client.get_admin_chat_ids()
+
+        self.assertEqual(result, [783143356])
+
+    async def test_health_check_logs_ok(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"ok": True})
+
+        client = OpenCartClient("https://example.com", "secret", DummyLogger())
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        self.addAsyncCleanup(client.aclose)
+
+        result = await client.health_check()
+
+        self.assertTrue(result)
+
+    async def test_request_returns_structured_non_2xx_json(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(401, json={"error": "invalid_key"})
+
+        client = OpenCartClient("https://example.com", "secret", DummyLogger())
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        self.addAsyncCleanup(client.aclose)
+
+        result = await client._request("GET", params={"route": "x"})
+
+        self.assertEqual(result["status"], 401)
+        self.assertEqual(result["json"], {"error": "invalid_key"})
+
 
 if __name__ == "__main__":
     unittest.main()

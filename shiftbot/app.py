@@ -18,7 +18,12 @@ class ShiftBotApp:
     def __init__(self, logger) -> None:
         self.logger = logger
         self.session_store = SessionStore()
-        self.oc_client = OpenCartClient(config.OC_API_BASE, config.OC_API_KEY, logger)
+        self.oc_client = OpenCartClient(
+            config.OC_API_BASE,
+            config.OC_API_KEY,
+            logger,
+            admin_base_url=config.OC_API_ADMIN_BASE,
+        )
         self.staff_cache = StaffCache(ttl_sec=config.STAFF_CACHE_TTL_SEC)
         self.staff_service = StaffService(self.oc_client, self.staff_cache)
         self.dead_soul_detector = DeadSoulDetector(
@@ -108,7 +113,12 @@ class ShiftBotApp:
         ]
         await app.bot.set_my_commands(commands)
 
-        self.admin_chat_ids = await self._load_admin_chat_ids()
+        try:
+            await self.oc_client.health_check()
+        except Exception as exc:
+            self.logger.warning("OC_API_HEALTH_CHECK_FAILED error=%s", exc)
+
+        self.admin_chat_ids = await self.oc_client.get_admin_chat_ids()
         app.bot_data["admin_chat_ids"] = self.admin_chat_ids
         app.bot_data["oc_client"] = self.oc_client
         app.bot_data.setdefault(ADMIN_NOTIFY_COOLDOWN_KEY, {})

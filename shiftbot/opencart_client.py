@@ -11,8 +11,9 @@ class ApiUnavailableError(RuntimeError):
 
 
 class OpenCartClient:
-    def __init__(self, base_url: str, api_key: str, logger) -> None:
+    def __init__(self, base_url: str, api_key: str, logger, admin_base_url: str | None = None) -> None:
         self.base_url = base_url
+        self.admin_base_url = admin_base_url
         self.api_key = api_key
         self.logger = logger
         self._client = httpx.AsyncClient(
@@ -38,12 +39,14 @@ class OpenCartClient:
         json_data: Optional[dict] = None,
         headers: Optional[dict] = None,
         *,
+        endpoint_path: str = "index.php",
         return_meta: bool = False,
     ) -> dict:
         self._require_config()
-        url = self.base_url
-        if not url.endswith("/index.php"):
-            url = f"{url.rstrip('/')}/index.php"
+        url = self.base_url.rstrip("/")
+        endpoint = endpoint_path.lstrip("/")
+        if not url.endswith(endpoint):
+            url = f"{url}/{endpoint}"
 
         all_params = dict(params or {})
         all_params["key"] = self.api_key
@@ -126,13 +129,13 @@ class OpenCartClient:
                 )
                 raise ApiUnavailableError(f"temporary_api_error status={response.status_code}")
 
-            try:
-                payload = response.json()
-            except ValueError as exc:
-                self.logger.exception("API_ERROR_JSON method=%s url=%s error=%s", method, url, exc)
-                raise ApiUnavailableError("temporary_api_error") from exc
-
             if response.status_code >= 400:
+                payload = None
+                try:
+                    parsed = response.json()
+                    payload = parsed if isinstance(parsed, dict) else None
+                except ValueError:
+                    payload = None
                 self.logger.warning(
                     "API_NON_2XX method=%s url=%s status=%s body=%s",
                     method,
@@ -143,9 +146,15 @@ class OpenCartClient:
                 return {
                     "success": False,
                     "status": response.status_code,
-                    "json": payload if isinstance(payload, dict) else None,
+                    "json": payload,
                     "text": response.text,
                 }
+
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                self.logger.exception("API_ERROR_JSON method=%s url=%s error=%s", method, url, exc)
+                raise ApiUnavailableError("temporary_api_error") from exc
 
             if return_meta:
                 return {
@@ -325,31 +334,53 @@ class OpenCartClient:
         from shiftbot import config
 
         now = time.time()
-        if self._admin_chat_ids_cache is not None and (now - self._admin_chat_ids_cache_ts) < 60:
+        if self._admin_chat_ids_cache is not None and (now - self._admin_chat_ids_cache_ts) < 600:
             return list(self._admin_chat_ids_cache)
 
-        try:
+        payload = await self._request(
+            "GET",
+            params={"route": "dl/geo_api", "action": "admin_chat_ids"},
+            return_meta=True,
+        )
+        if payload.get("status") == 404:
+            self.logger.info("ADMIN_CHAT_IDS_RETRY_ADMIN_ENDPOINT status=404")
             payload = await self._request(
                 "GET",
                 params={"route": "dl/geo_api", "action": "admin_chat_ids"},
+                endpoint_path="admin/index.php",
+                return_meta=True,
             )
-            if isinstance(payload, dict) and payload.get("ok") and isinstance(payload.get("chat_ids"), list):
-                result: list[int] = []
-                for x in payload["chat_ids"]:
-                    try:
-                        v = int(x)
-                        if v > 0:
-                            result.append(v)
-                    except (TypeError, ValueError):
-                        pass
-                self._admin_chat_ids_cache = result
-                self._admin_chat_ids_cache_ts = now
-                self.logger.info("ADMIN_CHAT_IDS_FETCHED chat_ids=%s", result)
-                return list(result)
-        except Exception as exc:
-            self.logger.warning("ADMIN_CHAT_IDS_FETCH_FAILED error=%s, using fallback", exc)
+
+        body = payload.get("json") if isinstance(payload, dict) else None
+        if isinstance(body, dict) and body.get("ok") and isinstance(body.get("chat_ids"), list):
+            result: list[int] = []
+            for x in body["chat_ids"]:
+                try:
+                    v = int(x)
+                    if v > 0:
+                        result.append(v)
+                except (TypeError, ValueError):
+                    pass
+            self._admin_chat_ids_cache = result
+            self._admin_chat_ids_cache_ts = now
+            self.logger.info("ADMIN_CHAT_IDS_FETCHED chat_ids=%s", result)
+            return list(result)
+
+        self.logger.warning("ADMIN_CHAT_IDS_FALLBACK status=%s payload=%s", payload.get("status"), body)
 
         return list(config.ADMIN_FORCE_CHAT_IDS)
+
+    async def health_check(self) -> bool:
+        payload = await self._request(
+            "GET",
+            params={"route": "dl/geo_api", "action": "ping"},
+            return_meta=True,
+        )
+        status = int(payload.get("status") or 0)
+        ok = 200 <= status < 300
+        metric = "oc_api_health_ok" if ok else "oc_api_health_fail"
+        self.logger.info("OC_API_HEALTH_CHECK metric=%s status=%s body=%s", metric, status, payload.get("json"))
+        return ok
 
     async def get_active_shifts_by_point(self, point_id: int) -> list[dict]:
         """Fetch all active shifts at a given point."""

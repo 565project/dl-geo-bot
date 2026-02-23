@@ -86,7 +86,7 @@ class StaleJobTests(unittest.IsolatedAsyncioTestCase):
 
         context = SimpleNamespace(
             bot=DummyBot(),
-            application=SimpleNamespace(bot_data={ADMIN_NOTIFY_COOLDOWN_KEY: {}}),
+            application=SimpleNamespace(bot_data={ADMIN_NOTIFY_COOLDOWN_KEY: {}, "admin_chat_ids": [9001]}),
         )
 
         stale_job = build_job_check_stale(DummySessionStore([session]), oc_client, DummyLogger())
@@ -117,7 +117,7 @@ class StaleJobTests(unittest.IsolatedAsyncioTestCase):
         oc_client = DummyOcClient(exc=RuntimeError("endpoint down"), staff={"staff_id": 66}, active_shift={"shift_id": 777})
         context = SimpleNamespace(
             bot=DummyBot(),
-            application=SimpleNamespace(bot_data={ADMIN_NOTIFY_COOLDOWN_KEY: {}}),
+            application=SimpleNamespace(bot_data={ADMIN_NOTIFY_COOLDOWN_KEY: {}, "admin_chat_ids": []}),
         )
         stale_job = build_job_check_stale(DummySessionStore([session]), oc_client, DummyLogger())
 
@@ -146,7 +146,7 @@ class StaleJobTests(unittest.IsolatedAsyncioTestCase):
         )
         context = SimpleNamespace(
             bot=DummyBot(),
-            application=SimpleNamespace(bot_data={ADMIN_NOTIFY_COOLDOWN_KEY: {}}),
+            application=SimpleNamespace(bot_data={ADMIN_NOTIFY_COOLDOWN_KEY: {}, "admin_chat_ids": []}),
         )
         stale_job = build_job_check_stale(DummySessionStore([session]), oc_client, DummyLogger())
 
