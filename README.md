@@ -10,5 +10,6 @@
 
 ## Новые переменные окружения API
 
-- `OC_API_ADMIN_BASE` — базовый URL admin API (`.../admin/index.php`) для retry сценариев `admin_chat_ids`.
+- `OC_API_BASE` — базовый URL OpenCart API **без** `index.php` (пример: `http://host:8080`).
+- `OC_API_ADMIN_BASE` — базовый URL admin API **без** `index.php` (пример: `http://host:8080/admin`) для retry сценариев `admin_chat_ids`.
 - `ADMIN_FORCE_CHAT_IDS` — fallback список chat_id (через запятую), используется если API не вернул валидный список.

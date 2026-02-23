@@ -12,8 +12,8 @@ class ApiUnavailableError(RuntimeError):
 
 class OpenCartClient:
     def __init__(self, base_url: str, api_key: str, logger, admin_base_url: str | None = None) -> None:
-        self.base_url = base_url
-        self.admin_base_url = admin_base_url
+        self.base_url = self._normalize_base_url(base_url)
+        self.admin_base_url = self._normalize_base_url(admin_base_url) if admin_base_url else None
         self.api_key = api_key
         self.logger = logger
         self._client = httpx.AsyncClient(
@@ -23,6 +23,22 @@ class OpenCartClient:
         )
         self._admin_chat_ids_cache: list[int] | None = None
         self._admin_chat_ids_cache_ts: float = 0.0
+
+    @staticmethod
+    def _normalize_base_url(base_url: str) -> str:
+        normalized = str(base_url or "").rstrip("/")
+        if normalized.endswith("/admin/index.php"):
+            raise ValueError("base_url must not include '/admin/index.php'; use base domain/path only")
+        if normalized.endswith("/index.php"):
+            normalized = normalized[: -len("/index.php")]
+        return normalized
+
+    def _build_url(self, endpoint_path: str) -> str:
+        base = self.base_url
+        if base.endswith("/index.php"):
+            base = base[: -len("/index.php")]
+        endpoint = endpoint_path.lstrip("/")
+        return f"{base.rstrip('/')}/{endpoint}"
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -43,10 +59,7 @@ class OpenCartClient:
         return_meta: bool = False,
     ) -> dict:
         self._require_config()
-        url = self.base_url.rstrip("/")
-        endpoint = endpoint_path.lstrip("/")
-        if not url.endswith(endpoint):
-            url = f"{url}/{endpoint}"
+        url = self._build_url(endpoint_path)
 
         all_params = dict(params or {})
         all_params["key"] = self.api_key

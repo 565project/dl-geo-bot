@@ -1,6 +1,7 @@
 import unittest
 from urllib.parse import parse_qs
 
+import asyncio
 import httpx
 
 from shiftbot.opencart_client import OpenCartClient
@@ -142,6 +143,21 @@ class OpenCartClientPingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], 401)
         self.assertEqual(result["json"], {"error": "invalid_key"})
+
+
+
+def test_init_rejects_admin_indexphp_in_base_url():
+    with unittest.TestCase().assertRaises(ValueError):
+        OpenCartClient("http://h:8080/admin/index.php", "secret", DummyLogger())
+
+def test_build_url_strips_double_indexphp():
+    cli = OpenCartClient("http://h:8080/index.php", "secret", DummyLogger())
+    try:
+        assert cli._build_url("admin/index.php") == "http://h:8080/admin/index.php"
+    finally:
+        asyncio.run(cli.aclose())
+
+
 
 
 if __name__ == "__main__":
