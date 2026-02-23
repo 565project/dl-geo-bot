@@ -144,11 +144,12 @@ class OpenCartClientPingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], 401)
         self.assertEqual(result["json"], {"error": "invalid_key"})
 
-
-
-def test_init_rejects_admin_indexphp_in_base_url():
-    with unittest.TestCase().assertRaises(ValueError):
-        OpenCartClient("http://h:8080/admin/index.php", "secret", DummyLogger())
+def test_init_accepts_admin_indexphp_in_base_url():
+    cli = OpenCartClient("http://h:8080/admin/index.php", "secret", DummyLogger())
+    try:
+        assert cli.base_url == "http://h:8080"
+    finally:
+        asyncio.run(cli.aclose())
 
 def test_build_url_strips_double_indexphp():
     cli = OpenCartClient("http://h:8080/index.php", "secret", DummyLogger())
@@ -156,6 +157,48 @@ def test_build_url_strips_double_indexphp():
         assert cli._build_url("admin/index.php") == "http://h:8080/admin/index.php"
     finally:
         asyncio.run(cli.aclose())
+
+
+def test_build_url_uses_normalized_admin_base_url():
+    cli = OpenCartClient(
+        "http://h:8080",
+        "secret",
+        DummyLogger(),
+        admin_base_url="http://h:8080/admin/index.php",
+    )
+    try:
+        assert cli._build_url("admin/index.php") == "http://h:8080/admin/index.php"
+    finally:
+        asyncio.run(cli.aclose())
+
+
+class OpenCartClientAdminEndpointConfigTests(unittest.IsolatedAsyncioTestCase):
+    async def test_get_admin_chat_ids_retry_works_with_admin_base_url_having_index_php(self):
+        calls = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(str(request.url))
+            if request.url.path == "/index.php":
+                return httpx.Response(404, json={"error": "not_found"})
+            if request.url.path == "/admin/index.php":
+                return httpx.Response(200, json={"ok": True, "chat_ids": [11, "22"]})
+            return httpx.Response(500, json={"error": "unexpected_path"})
+
+        client = OpenCartClient(
+            "http://h:8080/index.php",
+            "secret",
+            DummyLogger(),
+            admin_base_url="http://h:8080/admin/index.php",
+        )
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        self.addAsyncCleanup(client.aclose)
+
+        result = await client.get_admin_chat_ids()
+
+        self.assertEqual(result, [11, 22])
+        self.assertEqual(len(calls), 2)
+        self.assertIn("http://h:8080/index.php", calls[0])
+        self.assertIn("http://h:8080/admin/index.php", calls[1])
 
 
 

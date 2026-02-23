@@ -28,16 +28,17 @@ class OpenCartClient:
     def _normalize_base_url(base_url: str) -> str:
         normalized = str(base_url or "").rstrip("/")
         if normalized.endswith("/admin/index.php"):
-            raise ValueError("base_url must not include '/admin/index.php'; use base domain/path only")
+            normalized = normalized[: -len("/admin/index.php")]
         if normalized.endswith("/index.php"):
             normalized = normalized[: -len("/index.php")]
         return normalized
 
     def _build_url(self, endpoint_path: str) -> str:
-        base = self.base_url
-        if base.endswith("/index.php"):
-            base = base[: -len("/index.php")]
         endpoint = endpoint_path.lstrip("/")
+        if endpoint == "admin/index.php":
+            base = self.admin_base_url or self.base_url
+        else:
+            base = self.base_url
         return f"{base.rstrip('/')}/{endpoint}"
 
     async def aclose(self) -> None:
