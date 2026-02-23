@@ -110,6 +110,7 @@ class ShiftBotApp:
 
         self.admin_chat_ids = await self._load_admin_chat_ids()
         app.bot_data["admin_chat_ids"] = self.admin_chat_ids
+        app.bot_data["oc_client"] = self.oc_client
         app.bot_data.setdefault(ADMIN_NOTIFY_COOLDOWN_KEY, {})
 
     async def _post_shutdown(self, app: Application) -> None:

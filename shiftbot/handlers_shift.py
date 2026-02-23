@@ -5,7 +5,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from shiftbot import config
-from shiftbot.admin_notify import notify_admin_hardcoded
+from shiftbot.admin_notify import notify_admins
 from shiftbot.guards import ensure_staff_active, get_staff_or_reply
 from shiftbot.live_registry import LIVE_REGISTRY
 from shiftbot.models import MODE_AWAITING_LOCATION, MODE_CHOOSE_POINT, MODE_CHOOSE_ROLE, MODE_IDLE, MODE_REPORT_ISSUE
@@ -64,22 +64,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
 def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_detector, logger):
     TEST_PING_TASKS_KEY = "test_ping_tasks"
 
-    def admin_chat_ids_from_context(context: ContextTypes.DEFAULT_TYPE) -> list[int]:
-        raw = context.application.bot_data.get("admin_chat_ids") if context and context.application else None
-        if isinstance(raw, list):
-            return [int(chat_id) for chat_id in raw if isinstance(chat_id, int) and chat_id > 0]
-        if config.ADMIN_CHAT_ID > 0:
-            return [config.ADMIN_CHAT_ID]
-        return []
-
-    async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
-        chat_ids = admin_chat_ids_from_context(context)
-        if not chat_ids:
-            logger.warning("ADMIN_CHAT_IDS_NOT_SET")
-            return
-        for chat_id in chat_ids:
-            await context.bot.send_message(chat_id=chat_id, text=text)
-
     async def cmd_admin_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
         chat = update.effective_chat
@@ -87,9 +71,8 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
         if not user or not chat or not msg:
             return
 
-        session = session_store.get_or_create(user.id, chat.id)
         logger.info("ADMIN_TEST_CMD user_id=%s chat_id=%s", user.id, chat.id)
-        ok = await notify_admin_hardcoded(context, session, reason="ADMIN_TEST_CMD")
+        ok = await notify_admins(context, "🔔 ADMIN TEST from /admin_test")
         await msg.reply_text("sent (see logs)" if ok else "failed (see logs)")
 
     def reset_flow(session) -> None:
@@ -531,19 +514,17 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
             return
 
         if session.mode == MODE_REPORT_ISSUE:
-            if not admin_chat_ids_from_context(context):
+            report_text = (
+                "🐞 Сообщение об ошибке от сотрудника\n"
+                f"User ID: {user.id}\n"
+                f"Точка: {session.active_point_name or '—'}\n"
+                f"Shift ID: {session.active_shift_id or '—'}\n"
+                f"Текст: {text}"
+            )
+            sent = await notify_admins(context, report_text)
+            if not sent:
                 await msg.reply_text("Не удалось отправить сообщение администратору. Попробуйте позже.")
                 return
-            await notify_admins(
-                context,
-                text=(
-                    "🐞 Сообщение об ошибке от сотрудника\n"
-                    f"User ID: {user.id}\n"
-                    f"Точка: {session.active_point_name or '—'}\n"
-                    f"Shift ID: {session.active_shift_id or '—'}\n"
-                    f"Текст: {text}"
-                ),
-            )
             session.mode = MODE_IDLE
             await msg.reply_text("✅ Сообщение отправлено администратору.", reply_markup=main_menu_keyboard())
             return

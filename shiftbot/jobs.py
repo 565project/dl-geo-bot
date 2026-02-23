@@ -3,9 +3,8 @@ import time
 from telegram.ext import ContextTypes
 
 from shiftbot import config
-from shiftbot.config import ADMIN_FORCE_CHAT_IDS
 from shiftbot.models import STATUS_UNKNOWN
-from shiftbot.admin_notify import notify_admin_hardcoded
+from shiftbot.admin_notify import notify_admins
 
 ACTIVE_SHIFT_REFRESH_EVERY_SEC = 300
 
@@ -132,7 +131,19 @@ def build_job_check_stale(session_store, oc_client, logger):
                         "Если смена закончилась — /stop_shift."
                     ),
                 )
-                await notify_admin_hardcoded(context, session, reason="STALE_WARN_AFTER_STAFF")
+                stale_admin_text = (
+                    f"⏰ Нет обновлений геолокации\n"
+                    f"shift_id: {session.active_shift_id or '—'}\n"
+                    f"staff: {getattr(session, 'active_staff_name', None) or session.user_id}\n"
+                    f"point_id: {session.active_point_id or '—'}\n"
+                    f"last_seen: {round(age, 0):.0f}s назад"
+                )
+                await notify_admins(
+                    context,
+                    stale_admin_text,
+                    shift_id=session.active_shift_id,
+                    cooldown_key="stale_warn",
+                )
 
                 await _refresh_active_shift_if_needed(session, now)
 
@@ -194,15 +205,6 @@ def build_job_check_stale(session_store, oc_client, logger):
                     staff_id = getattr(session, "staff_id", session.user_id)
                     point_id = getattr(session, "point_id", session.active_point_id)
 
-                    # Берём IDs от сервера
-                    targets = admin_chat_ids or []
-
-                    # Если сервер никого не вернул — используем жёсткий fallback
-                    if not targets:
-                        targets = ADMIN_FORCE_CHAT_IDS
-
-                    logger.info(f"ADMIN_FORCE_NOTIFY shift_id={shift_id} targets={targets}")
-
                     admin_text = (
                         f"⚠️ ПОДОЗРЕНИЕ (2-й раунд)\n\n"
                         f"Смена: {shift_id}\n"
@@ -212,13 +214,11 @@ def build_job_check_stale(session_store, oc_client, logger):
                         f"Требуется проверка."
                     )
 
-                    for chat_id in targets:
-                        try:
-                            await context.bot.send_message(
-                                chat_id=int(chat_id),
-                                text=admin_text
-                            )
-                        except Exception as e:
-                            logger.error(f"ADMIN_NOTIFY_FAILED chat_id={chat_id} error={e}")
+                    await notify_admins(
+                        context,
+                        admin_text,
+                        shift_id=shift_id,
+                        cooldown_key="admin_notify_stale",
+                    )
 
     return job_check_stale

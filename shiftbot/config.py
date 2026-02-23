@@ -2,7 +2,7 @@ import os
 
 # Тестовые значения (могут быть переопределены через env)
 BOT_TOKEN_DEFAULT = "8105246434:AAH-6lBOMulCmgGoKlsFNVNftV6mYRh8K1Q"
-OC_API_BASE_DEFAULT = "https://dobrolunch-analitika.mywebcenter.ru/index.php"
+OC_API_BASE_DEFAULT = "http://100.121.213.12/index.php"
 OC_API_KEY_DEFAULT = "fd34635cd94a789b50dfce3373b0ba78"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", BOT_TOKEN_DEFAULT)
@@ -63,7 +63,7 @@ ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 
 # Временный жёсткий канал тестовых admin-уведомлений
 HARD_ADMIN_CHAT_ID = 8221611228
-HARD_ADMIN_ENABLED = True
+HARD_ADMIN_ENABLED = False
 HARD_ADMIN_DELAY_SEC = 1
 
 ENABLE_STALE_CHECK = os.getenv("ENABLE_STALE_CHECK", "1") not in {"0", "false", "False"}

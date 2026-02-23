@@ -1,6 +1,7 @@
 from typing import Optional
 import asyncio
 import json
+import time
 
 import httpx
 
@@ -19,6 +20,8 @@ class OpenCartClient:
             headers={"User-Agent": "dl-geo-bot/1.0"},
             follow_redirects=True,
         )
+        self._admin_chat_ids_cache: list[int] | None = None
+        self._admin_chat_ids_cache_ts: float = 0.0
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -315,6 +318,53 @@ class OpenCartClient:
             data=payload,
         )
         return data if isinstance(data, dict) else {"error": "Некорректный ответ API"}
+
+    async def get_admin_chat_ids(self) -> list[int]:
+        """Fetch admin chat IDs from API. Caches result for 60 seconds.
+        Falls back to ADMIN_FORCE_CHAT_IDS from config on any failure."""
+        from shiftbot import config
+
+        now = time.time()
+        if self._admin_chat_ids_cache is not None and (now - self._admin_chat_ids_cache_ts) < 60:
+            return list(self._admin_chat_ids_cache)
+
+        try:
+            payload = await self._request(
+                "GET",
+                params={"route": "dl/geo_api", "action": "admin_chat_ids"},
+            )
+            if isinstance(payload, dict) and payload.get("ok") and isinstance(payload.get("chat_ids"), list):
+                result: list[int] = []
+                for x in payload["chat_ids"]:
+                    try:
+                        v = int(x)
+                        if v > 0:
+                            result.append(v)
+                    except (TypeError, ValueError):
+                        pass
+                self._admin_chat_ids_cache = result
+                self._admin_chat_ids_cache_ts = now
+                self.logger.info("ADMIN_CHAT_IDS_FETCHED chat_ids=%s", result)
+                return list(result)
+        except Exception as exc:
+            self.logger.warning("ADMIN_CHAT_IDS_FETCH_FAILED error=%s, using fallback", exc)
+
+        return list(config.ADMIN_FORCE_CHAT_IDS)
+
+    async def get_active_shifts_by_point(self, point_id: int) -> list[dict]:
+        """Fetch all active shifts at a given point."""
+        try:
+            payload = await self._request(
+                "GET",
+                params={"route": "dl/geo_api/active_shifts_by_point", "point_id": str(point_id)},
+            )
+        except Exception as exc:
+            self.logger.warning("GET_ACTIVE_SHIFTS_BY_POINT_FAILED point_id=%s error=%s", point_id, exc)
+            return []
+        shifts = payload.get("shifts") if isinstance(payload, dict) else None
+        if not isinstance(shifts, list):
+            return []
+        return [s for s in shifts if isinstance(s, dict)]
 
     async def violation_tick(self, shift_id: int) -> dict:
         payload = {"shift_id": int(shift_id)}

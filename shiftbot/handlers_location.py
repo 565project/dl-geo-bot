@@ -12,7 +12,7 @@ from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS
 from shiftbot.opencart_client import ApiUnavailableError
 from shiftbot.ping_alerts import process_ping_alerts
 from shiftbot.violation_alerts import maybe_send_admin_notify_from_decision
-from shiftbot.admin_notify import notify_admin_hardcoded
+from shiftbot.admin_notify import notify_admins
 
 
 def build_location_handlers(session_store, staff_service, oc_client, dead_soul_detector, logger):
@@ -66,22 +66,6 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
                 [InlineKeyboardButton("🔁 Сменить точку", callback_data="change_point")],
             ]
         )
-
-    def admin_chat_ids_from_context(context: ContextTypes.DEFAULT_TYPE) -> list[int]:
-        raw = context.application.bot_data.get("admin_chat_ids") if context and context.application else None
-        if isinstance(raw, list):
-            return [int(chat_id) for chat_id in raw if isinstance(chat_id, int) and chat_id > 0]
-        if config.ADMIN_CHAT_ID > 0:
-            return [config.ADMIN_CHAT_ID]
-        return []
-
-    async def maybe_notify_admin(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
-        chat_ids = admin_chat_ids_from_context(context)
-        if not chat_ids:
-            logger.warning("ADMIN_CHAT_IDS_NOT_SET")
-            return
-        for chat_id in chat_ids:
-            await context.bot.send_message(chat_id=chat_id, text=text)
 
     def clear_active_shift(session) -> None:
         session.active_shift_id = None
@@ -247,12 +231,23 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
                         f"shift#{session.active_shift_id} staff#{staff_id} point#{session.active_point_id or '—'}\n"
                         f"out_violation_rounds={out_rounds}"
                     )
-                await maybe_notify_admin(context, admin_text)
+                await notify_admins(context, admin_text, shift_id=session.active_shift_id)
 
         if status == STATUS_UNKNOWN and (now - session.last_unknown_warn_ts) >= config.ALERT_COOLDOWN_OUT_SEC:
             session.last_unknown_warn_ts = now
             await message.reply_text("ℹ️ Не удалось определить статус GPS. Проверьте, что геолокация включена.")
-            await notify_admin_hardcoded(context, session, reason="UNKNOWN_WARN_AFTER_STAFF")
+            unknown_admin_text = (
+                f"❓ Неизвестный статус GPS\n"
+                f"shift_id: {session.active_shift_id or '—'}\n"
+                f"staff: {session.active_staff_name or session.user_id}\n"
+                f"point_id: {session.active_point_id or '—'}"
+            )
+            await notify_admins(
+                context,
+                unknown_admin_text,
+                shift_id=session.active_shift_id,
+                cooldown_key="unknown_warn",
+            )
 
         sig = f"{round(lat, config.GPS_SIG_ROUND)}:{round(lon, config.GPS_SIG_ROUND)}"
         point_id = session.selected_point_id or session.active_point_id
@@ -264,7 +259,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             now_ts=now,
         )
         for alert in alerts:
-            await maybe_notify_admin(
+            await notify_admins(
                 context,
                 (
                     "🚨 Мёртвые души: 10 совпадений подряд GPS. "
@@ -616,6 +611,49 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
 
         await status_message.edit_text(success_message)
         await message.reply_text("Главное меню снова доступно ниже.", reply_markup=main_menu_keyboard())
+
+        # Task 3: Companion notifications
+        try:
+            current_point_id = session.active_point_id
+            current_shift_id = session.active_shift_id
+            new_staff_name = session.active_staff_name or f"сотрудник #{oc_staff_id}"
+
+            if current_point_id is not None:
+                active_shifts = await oc_client.get_active_shifts_by_point(current_point_id)
+                colleagues = [
+                    s for s in active_shifts
+                    if (
+                        s.get("shift_id") != current_shift_id
+                        and s.get("id") != current_shift_id
+                        and s.get("staff_id") != oc_staff_id
+                    )
+                ]
+
+                if not colleagues:
+                    await message.reply_text("✅ Смена начата! Удачи в работе!")
+                else:
+                    names = ", ".join(
+                        s.get("full_name") or s.get("staff_name") or f"сотрудник #{s.get('staff_id', '?')}"
+                        for s in colleagues
+                    )
+                    await message.reply_text(f"👥 На точке уже работают: {names}")
+                    for colleague in colleagues:
+                        colleague_chat_id = colleague.get("telegram_chat_id")
+                        if not colleague_chat_id:
+                            continue
+                        try:
+                            await context.bot.send_message(
+                                chat_id=int(colleague_chat_id),
+                                text=f"👋 К вам на точку присоединился: {new_staff_name}",
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "COMPANION_NOTIFY_COLLEAGUE_FAILED chat_id=%s error=%s",
+                                colleague_chat_id,
+                                exc,
+                            )
+        except Exception as exc:
+            logger.warning("COMPANION_NOTIFY_FAILED error=%s", exc)
 
     return [
         MessageHandler(filters.UpdateType.MESSAGE & filters.LOCATION, handle_location_message),
