@@ -3,6 +3,7 @@ import time
 from telegram.ext import ContextTypes
 
 from shiftbot import config
+from shiftbot.live_registry import LIVE_REGISTRY
 from shiftbot.models import STATUS_UNKNOWN
 from shiftbot.admin_notify import notify_admins
 
@@ -126,9 +127,8 @@ def build_job_check_stale(session_store, oc_client, logger):
                 await context.bot.send_message(
                     chat_id=session.chat_id,
                     text=(
-                        "❓ Давно нет обновлений Live Location.\n"
-                        "Проверь, что трансляция геопозиции активна и Telegram имеет доступ к геолокации.\n\n"
-                        "Если смена закончилась — /stop_shift."
+                        "⚠️ Мы вас не видим. Пожалуйста, включите трансляцию геопозиции — "
+                        "иначе смена завершится автоматически."
                     ),
                 )
                 stale_admin_text = (
@@ -205,13 +205,43 @@ def build_job_check_stale(session_store, oc_client, logger):
                     staff_id = getattr(session, "staff_id", session.user_id)
                     point_id = getattr(session, "point_id", session.active_point_id)
 
+                    # Auto-stop the shift on 2nd violation round
+                    auto_stopped = False
+                    try:
+                        stop_result = await oc_client.shift_end(
+                            {"shift_id": shift_id, "end_reason": "auto_violation_stale"}
+                        )
+                        auto_stopped = not (stop_result.get("ok") is False and stop_result.get("error"))
+                        logger.info(
+                            "AUTO_STOP_SHIFT shift_id=%s reason=stale result=%s",
+                            shift_id,
+                            stop_result,
+                        )
+                    except Exception as exc:
+                        logger.error("AUTO_STOP_SHIFT_FAILED shift_id=%s error=%s", shift_id, exc)
+
+                    if auto_stopped:
+                        LIVE_REGISTRY.remove_shift(shift_id)
+                        _stop_monitoring_session(session)
+                        try:
+                            await context.bot.send_message(
+                                chat_id=session.chat_id,
+                                text=(
+                                    "🔴 Ваша смена завершена автоматически.\n"
+                                    "Геолокация не обновлялась длительное время.\n"
+                                    "Если это ошибка — обратитесь к администратору."
+                                ),
+                            )
+                        except Exception as exc:
+                            logger.error("AUTO_STOP_NOTIFY_STAFF_FAILED chat_id=%s error=%s", session.chat_id, exc)
+
                     admin_text = (
                         f"⚠️ ПОДОЗРЕНИЕ (2-й раунд)\n\n"
                         f"Смена: {shift_id}\n"
                         f"Сотрудник: {staff_id}\n"
                         f"Точка: {point_id}\n\n"
                         f"Сотрудник не виден (нет обновлений геолокации).\n"
-                        f"Требуется проверка."
+                        + ("✅ Смена завершена автоматически." if auto_stopped else "❗ Автозавершение не удалось — требуется ручная проверка.")
                     )
 
                     await notify_admins(

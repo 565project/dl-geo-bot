@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes, MessageHandler, filters
 from shiftbot import config
 from shiftbot.geo import haversine_m
 from shiftbot.handlers_shift import active_shift_keyboard, main_menu_keyboard
+from shiftbot.live_registry import LIVE_REGISTRY
 from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS_OUT, STATUS_UNKNOWN
 from shiftbot.opencart_client import ApiUnavailableError
 from shiftbot.ping_alerts import process_ping_alerts
@@ -225,13 +226,43 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
                         "Ждём повторного нарушения.\n"
                         f"shift#{session.active_shift_id} staff#{staff_id} point#{session.active_point_id or '—'}"
                     )
+                    await notify_admins(context, admin_text, shift_id=session.active_shift_id)
                 else:
+                    # 2nd violation round — auto-stop the shift
+                    shift_id_to_stop = session.active_shift_id
+                    auto_stopped = False
+                    try:
+                        stop_result = await oc_client.shift_end(
+                            {"shift_id": shift_id_to_stop, "end_reason": "auto_violation_out"}
+                        )
+                        auto_stopped = not (stop_result.get("ok") is False and stop_result.get("error"))
+                        logger.info(
+                            "AUTO_STOP_SHIFT shift_id=%s reason=out_rounds=%s result=%s",
+                            shift_id_to_stop,
+                            out_rounds,
+                            stop_result,
+                        )
+                    except Exception as exc:
+                        logger.error("AUTO_STOP_SHIFT_FAILED shift_id=%s error=%s", shift_id_to_stop, exc)
+
+                    if auto_stopped:
+                        LIVE_REGISTRY.remove_shift(shift_id_to_stop)
+                        dead_soul_detector.remove_shift(shift_id_to_stop)
+                        session_store.clear_shift_state(session)
+                        await message.reply_text(
+                            "🔴 Ваша смена завершена автоматически.\n"
+                            "Вы долгое время находились вне рабочей зоны.\n"
+                            "Если это ошибка — обратитесь к администратору.",
+                            reply_markup=main_menu_keyboard(),
+                        )
+
                     admin_text = (
-                        "🚨 Повторное нарушение геозоны: запросить проверку.\n"
-                        f"shift#{session.active_shift_id} staff#{staff_id} point#{session.active_point_id or '—'}\n"
-                        f"out_violation_rounds={out_rounds}"
+                        "🚨 Повторное нарушение геозоны.\n"
+                        f"shift#{shift_id_to_stop} staff#{staff_id} point#{session.active_point_id or '—'}\n"
+                        f"out_violation_rounds={out_rounds}\n"
+                        + ("✅ Смена завершена автоматически." if auto_stopped else "❗ Автозавершение не удалось — требуется ручная проверка.")
                     )
-                await notify_admins(context, admin_text, shift_id=session.active_shift_id)
+                    await notify_admins(context, admin_text, shift_id=shift_id_to_stop)
 
         if status == STATUS_UNKNOWN and (now - session.last_unknown_warn_ts) >= config.ALERT_COOLDOWN_OUT_SEC:
             session.last_unknown_warn_ts = now
