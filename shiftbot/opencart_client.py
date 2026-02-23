@@ -351,23 +351,23 @@ class OpenCartClient:
         if self._admin_chat_ids_cache is not None and (now - self._admin_chat_ids_cache_ts) < 600:
             return list(self._admin_chat_ids_cache)
 
-        payload = await self._request(
-            "GET",
-            params={"route": "dl/geo_api", "action": "admin_chat_ids"},
-            return_meta=True,
-        )
-        if payload.get("status") == 404:
-            self.logger.info("ADMIN_CHAT_IDS_RETRY_ADMIN_ENDPOINT status=404")
+        fallback = list(config.ADMIN_FORCE_CHAT_IDS)
+
+        try:
             payload = await self._request(
                 "GET",
-                params={"route": "dl/geo_api", "action": "admin_chat_ids"},
-                endpoint_path="admin/index.php",
+                params={"route": "dl/geo_api/admin_chat_ids"},
                 return_meta=True,
             )
+        except Exception as exc:
+            self.logger.warning("ADMIN_CHAT_IDS_FALLBACK reason=request_error error=%s fallback=%s", exc, fallback)
+            return fallback
 
+        status = int(payload.get("status") or 0) if isinstance(payload, dict) else 0
         body = payload.get("json") if isinstance(payload, dict) else None
-        if isinstance(body, dict) and body.get("ok") and isinstance(body.get("chat_ids"), list):
-            result: list[int] = []
+
+        result: list[int] = []
+        if 200 <= status < 300 and isinstance(body, dict) and body.get("ok") is True and isinstance(body.get("chat_ids"), list):
             for x in body["chat_ids"]:
                 try:
                     v = int(x)
@@ -375,14 +375,20 @@ class OpenCartClient:
                         result.append(v)
                 except (TypeError, ValueError):
                     pass
+
+        if result:
             self._admin_chat_ids_cache = result
             self._admin_chat_ids_cache_ts = now
             self.logger.info("ADMIN_CHAT_IDS_FETCHED chat_ids=%s", result)
             return list(result)
 
-        self.logger.warning("ADMIN_CHAT_IDS_FALLBACK status=%s payload=%s", payload.get("status"), body)
-
-        return list(config.ADMIN_FORCE_CHAT_IDS)
+        self.logger.warning(
+            "ADMIN_CHAT_IDS_FALLBACK reason=invalid_response status=%s body=%s fallback=%s",
+            status,
+            body,
+            fallback,
+        )
+        return fallback
 
     async def health_check(self) -> bool:
         payload = await self._request(

@@ -87,14 +87,11 @@ class OpenCartClientPingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["headers"].get("content-type"), "application/json")
         self.assertEqual(captured["body"], '{"shift_id":17}')
 
-    async def test_get_admin_chat_ids_retries_admin_endpoint_on_404(self):
-        calls = []
-
+    async def test_get_admin_chat_ids_success(self):
         def handler(request: httpx.Request) -> httpx.Response:
-            calls.append(str(request.url))
-            if request.url.path.endswith("/index.php") and not request.url.path.endswith("/admin/index.php"):
-                return httpx.Response(404, json={"error": "not_found"})
-            return httpx.Response(200, json={"ok": True, "chat_ids": [101, "202"]})
+            query = parse_qs(request.url.query.decode())
+            self.assertEqual(query.get("route"), ["dl/geo_api/admin_chat_ids"])
+            return httpx.Response(200, json={"ok": True, "chat_ids": [1, 2, "3"]})
 
         client = OpenCartClient("https://example.com", "secret", DummyLogger())
         client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -102,22 +99,47 @@ class OpenCartClientPingTests(unittest.IsolatedAsyncioTestCase):
 
         result = await client.get_admin_chat_ids()
 
-        self.assertEqual(result, [101, 202])
-        self.assertEqual(len(calls), 2)
-        self.assertIn("/index.php", calls[0])
-        self.assertIn("/admin/index.php", calls[1])
+        self.assertEqual(result, [1, 2, 3])
 
-    async def test_get_admin_chat_ids_fallback_on_non_json_error(self):
+    async def test_get_admin_chat_ids_fallback_on_invalid_payload(self):
+        from shiftbot import config
+
+        original_force_ids = config.ADMIN_FORCE_CHAT_IDS
+        config.ADMIN_FORCE_CHAT_IDS = [777]
+
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(403, text="forbidden")
+            return httpx.Response(200, text="<html>not json</html>", headers={"content-type": "text/html"})
 
         client = OpenCartClient("https://example.com", "secret", DummyLogger())
         client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         self.addAsyncCleanup(client.aclose)
 
-        result = await client.get_admin_chat_ids()
+        try:
+            result = await client.get_admin_chat_ids()
+        finally:
+            config.ADMIN_FORCE_CHAT_IDS = original_force_ids
 
-        self.assertEqual(result, [783143356])
+        self.assertEqual(result, [777])
+
+    async def test_get_admin_chat_ids_returns_empty_without_fallback(self):
+        from shiftbot import config
+
+        original_force_ids = config.ADMIN_FORCE_CHAT_IDS
+        config.ADMIN_FORCE_CHAT_IDS = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"ok": False})
+
+        client = OpenCartClient("https://example.com", "secret", DummyLogger())
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        self.addAsyncCleanup(client.aclose)
+
+        try:
+            result = await client.get_admin_chat_ids()
+        finally:
+            config.ADMIN_FORCE_CHAT_IDS = original_force_ids
+
+        self.assertEqual(result, [])
 
     async def test_health_check_logs_ok(self):
         def handler(request: httpx.Request) -> httpx.Response:
@@ -172,33 +194,6 @@ def test_build_url_uses_normalized_admin_base_url():
         asyncio.run(cli.aclose())
 
 
-class OpenCartClientAdminEndpointConfigTests(unittest.IsolatedAsyncioTestCase):
-    async def test_get_admin_chat_ids_retry_works_with_admin_base_url_having_index_php(self):
-        calls = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            calls.append(str(request.url))
-            if request.url.path == "/index.php":
-                return httpx.Response(404, json={"error": "not_found"})
-            if request.url.path == "/admin/index.php":
-                return httpx.Response(200, json={"ok": True, "chat_ids": [11, "22"]})
-            return httpx.Response(500, json={"error": "unexpected_path"})
-
-        client = OpenCartClient(
-            "http://h:8080/index.php",
-            "secret",
-            DummyLogger(),
-            admin_base_url="http://h:8080/admin/index.php",
-        )
-        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        self.addAsyncCleanup(client.aclose)
-
-        result = await client.get_admin_chat_ids()
-
-        self.assertEqual(result, [11, 22])
-        self.assertEqual(len(calls), 2)
-        self.assertIn("http://h:8080/index.php", calls[0])
-        self.assertIn("http://h:8080/admin/index.php", calls[1])
 
 
 
