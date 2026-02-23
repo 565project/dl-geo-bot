@@ -54,11 +54,36 @@ def _alert_text(alert: dict) -> tuple[str | None, str | None]:
             "Срочно запросить фотоподтверждение.",
         )
     if alert_type == "admin_same_location_2":
+        cluster = alert.get("dead_souls_cluster") if isinstance(alert.get("dead_souls_cluster"), dict) else {}
+        cluster_point_id = cluster.get("point_id") or point_id
+        point_name = cluster.get("point_name") or alert.get("point_name")
+        point_text = f"{cluster_point_id}"
+        if point_name:
+            point_text = f"{cluster_point_id} ({point_name})"
+
+        staff = cluster.get("staff") if isinstance(cluster.get("staff"), list) else []
+        staff_lines = []
+        for member in staff:
+            if not isinstance(member, dict):
+                continue
+            member_name = member.get("full_name") or member.get("staff_name")
+            member_id = member.get("staff_id") or "—"
+            role = member.get("role")
+            name_text = member_name or f"ID {member_id}"
+            role_text = f" — {role}" if role else ""
+            staff_lines.append(f"• {name_text}{role_text}")
+
+        if not staff_lines:
+            staff_lines.append(f"• {full_name or f'ID {staff_id}'}")
+
+        staff_block = "\n".join(staff_lines)
+
         return (
             None,
             "⚠ Подозрительная гео-активность\n"
-            f"Сотрудник: {full_name or staff_id}\n"
-            f"Точка: {point_id}\n"
+            f"Точка: {point_text}\n"
+            "Сотрудники в кластере:\n"
+            f"{staff_block}\n"
             "2 раза подряд отправлены одинаковые координаты.\n"
             "Требуется проверка (возможна фиксация с одного устройства).",
         )
@@ -104,15 +129,28 @@ async def process_ping_alerts(
     fallback_shift_id: int | None,
     logger,
 ) -> None:
-    alerts = response.get("alerts")
-    if not isinstance(alerts, list) or not alerts:
+    alerts = response.get("alerts") if isinstance(response, dict) else None
+    normalized_alerts = [alert for alert in alerts if isinstance(alert, dict)] if isinstance(alerts, list) else []
+
+    admin_alert = str(response.get("admin_alert") or "") if isinstance(response, dict) else ""
+    if admin_alert == "admin_same_location_2":
+        normalized_alerts.append(
+            {
+                "type": admin_alert,
+                "shift_id": response.get("shift_id"),
+                "point_id": response.get("point_id"),
+                "point_name": response.get("point_name"),
+                "dead_souls_cluster": response.get("dead_souls_cluster"),
+                "admin_chat_ids": response.get("admin_chat_ids"),
+            }
+        )
+
+    if not normalized_alerts:
         return
 
     now = time.time()
     cooldowns = context.application.bot_data.setdefault(PING_ALERT_COOLDOWN_KEY, {})
-    for raw_alert in alerts:
-        if not isinstance(raw_alert, dict):
-            continue
+    for raw_alert in normalized_alerts:
 
         alert_type = str(raw_alert.get("type") or "")
         if not alert_type:
