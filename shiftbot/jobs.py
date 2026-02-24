@@ -22,6 +22,12 @@ def build_job_check_stale(session_store, oc_client, logger):
             session.active = False
             return
 
+        # Shift closed or suspended on the server side — treat as inactive
+        if shift.get("ended_at") or str(shift.get("override_status") or "").lower() == "suspended":
+            session.active_shift_id = None
+            session.active = False
+            return
+
         shift_id = _as_int(shift.get("shift_id") or shift.get("id"))
         session.active_shift_id = shift_id
         session.active = shift_id is not None
@@ -118,6 +124,25 @@ def build_job_check_stale(session_store, oc_client, logger):
                 if (now - session.last_stale_notify_ts) < config.STALE_NOTIFY_COOLDOWN_SEC:
                     continue
 
+                # Force-refresh shift status before doing anything else so we
+                # don't spam a stale warning for a shift that's already closed.
+                session.last_active_shift_refresh_ts = 0.0
+                await _refresh_active_shift_if_needed(session, now)
+
+                if not session.active_shift_id:
+                    logger.info(
+                        "STALE_SHIFT_ALREADY_ENDED user=%s -> stop monitoring", session.user_id
+                    )
+                    _stop_monitoring_session(session)
+                    try:
+                        await context.bot.send_message(
+                            chat_id=session.chat_id,
+                            text="⚠️ Ваша смена завершена администратором. Если это ошибка — свяжитесь с нами.",
+                        )
+                    except Exception as exc:
+                        logger.error("SHIFT_ENDED_NOTIFY_FAIL chat_id=%s error=%s", session.chat_id, exc)
+                    continue
+
                 session.last_stale_notify_ts = now
                 session.last_status = STATUS_UNKNOWN
                 session.out_streak = 0
@@ -126,8 +151,7 @@ def build_job_check_stale(session_store, oc_client, logger):
                 await context.bot.send_message(
                     chat_id=session.chat_id,
                     text=(
-                        "⚠️ Мы вас не видим. Пожалуйста, включите трансляцию геопозиции — "
-                        "иначе смена завершится автоматически."
+                        "⚠️ Мы вас не видим. Пожалуйста, включите трансляцию геопозиции."
                     ),
                 )
                 stale_admin_text = (
@@ -138,13 +162,6 @@ def build_job_check_stale(session_store, oc_client, logger):
                     f"last_seen: {round(age, 0):.0f}s назад"
                 )
                 logger.info("STALE_WARN_SUPPRESSED text=%s", stale_admin_text.replace("\n", " | "))
-
-                await _refresh_active_shift_if_needed(session, now)
-
-                if not session.active_shift_id:
-                    logger.warning("STALE_TICK_SKIP_NO_ACTIVE_SHIFT user=%s", session.user_id)
-                    _stop_monitoring_session(session)
-                    continue
 
                 logger.info(
                     "VIOLATION_TICK_PRECHECK user=%s shift_id=%s last_ping_ts=%s last_live_update_ts=%s mode=%s active=%s",
@@ -183,9 +200,14 @@ def build_job_check_stale(session_store, oc_client, logger):
                         session.active_shift_id,
                     )
                     _stop_monitoring_session(session)
-                    await _refresh_active_shift_if_needed(session, now)
-                    if not session.active_shift_id:
-                        continue
+                    try:
+                        await context.bot.send_message(
+                            chat_id=session.chat_id,
+                            text="⚠️ Ваша смена завершена администратором. Если это ошибка — свяжитесь с нами.",
+                        )
+                    except Exception as exc:
+                        logger.error("SHIFT_ENDED_NOTIFY_FAIL chat_id=%s error=%s", session.chat_id, exc)
+                    continue
 
                 if decisions.get("staff_warn"):
                     logger.info(
