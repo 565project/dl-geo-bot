@@ -204,7 +204,7 @@ def build_job_check_stale(session_store, oc_client, logger):
                     auto_stopped = False
                     try:
                         stop_result = await oc_client.shift_end(
-                            {"shift_id": shift_id, "end_reason": "auto_violation_stale"}
+                            {"shift_id": shift_id, "end_reason": "auto_no_signal"}
                         )
                         auto_stopped = not (stop_result.get("ok") is False and stop_result.get("error"))
                         logger.info(
