@@ -9,7 +9,15 @@ from shiftbot import config
 from shiftbot.geo import haversine_m
 from shiftbot.handlers_shift import active_shift_keyboard, main_menu_keyboard
 from shiftbot.live_registry import LIVE_REGISTRY
-from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS_OUT, STATUS_UNKNOWN
+from shiftbot.models import (
+    MODE_AWAITING_LOCATION,
+    MODE_CHOOSE_POINT,
+    MODE_CHOOSE_ROLE,
+    MODE_IDLE,
+    STATUS_IN,
+    STATUS_OUT,
+    STATUS_UNKNOWN,
+)
 from shiftbot.opencart_client import ApiUnavailableError
 from shiftbot.ping_alerts import process_ping_alerts
 from shiftbot.violation_alerts import maybe_send_admin_notify_from_decision
@@ -471,6 +479,10 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         session.last_lon = lon
         session.last_acc = float(acc) if acc is not None else None
 
+        if session.mode in {MODE_CHOOSE_POINT, MODE_CHOOSE_ROLE}:
+            logger.info("LOCATION_UPDATE_IGNORED mode=%s tg=%s", session.mode, user.id)
+            return
+
         staff = await oc_client.get_staff_by_telegram(user.id)
         if not staff:
             logger.info("LOCATION_UPDATE staff_not_found tg=%s", user.id)
@@ -503,6 +515,11 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             logger.info("LOCATION_UPDATE no active shift staff_id=%s", oc_staff_id)
 
 
+
+        should_run_geo_gate_check = (not update.edited_message) or session.gate_attempt == 0
+        if not should_run_geo_gate_check:
+            logger.info("GEO_GATE_WAITING_FOR_MANUAL_RECHECK tg=%s", user.id)
+            return
 
         should_run_geo_gate_check = (not update.edited_message) or session.gate_attempt == 0
         if not should_run_geo_gate_check:
