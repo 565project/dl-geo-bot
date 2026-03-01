@@ -502,6 +502,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         else:
             logger.info("LOCATION_UPDATE no active shift staff_id=%s", oc_staff_id)
 
+
         if session.mode == MODE_AWAITING_LOCATION:
             logger.info("GEO_GATE_WAITING_FOR_MANUAL_RECHECK tg=%s", user.id)
         return
