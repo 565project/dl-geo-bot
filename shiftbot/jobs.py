@@ -212,9 +212,26 @@ def build_job_check_stale(session_store, oc_client, logger):
                         )
                         continue
 
-                    is_error = bool(stop_result.get("ok") is False and stop_result.get("error"))
-                    error_payload = (stop_result.get("json") or {}) if isinstance(stop_result, dict) else {}
-                    error_code = str(error_payload.get("error") or stop_result.get("error") or "").strip().lower()
+                    status_code = None
+                    ok_flag = None
+                    success_flag = None
+                    error_payload = {}
+                    if isinstance(stop_result, dict):
+                        status_code = _as_int(stop_result.get("status"))
+                        ok_flag = stop_result.get("ok")
+                        success_flag = stop_result.get("success")
+                        raw_error_payload = stop_result.get("json")
+                        if isinstance(raw_error_payload, dict):
+                            error_payload = raw_error_payload
+
+                    top_level_error = stop_result.get("error") if isinstance(stop_result, dict) else ""
+                    error_code = str(error_payload.get("error") or top_level_error or "").strip().lower()
+                    is_error = bool(
+                        (ok_flag is False)
+                        or (success_flag is False)
+                        or (status_code is not None and status_code >= 400)
+                        or error_code
+                    )
 
                     if not is_error:
                         auto_stopped = True
