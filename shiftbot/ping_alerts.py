@@ -80,12 +80,14 @@ def _alert_text(alert: dict) -> tuple[str | None, str | None]:
                 continue
             member_name = member.get("full_name") or member.get("staff_name") or member.get("name")
             member_id = member.get("staff_id") or member.get("id") or member.get("employee_id") or "—"
+
             if member_name and member_id != "—":
                 name_text = f"{member_name} (ID {member_id})"
             elif member_name:
                 name_text = str(member_name)
             else:
                 name_text = f"ID {member_id}"
+
             staff_display_names.append(name_text)
 
         if not staff_display_names:
@@ -101,6 +103,7 @@ def _alert_text(alert: dict) -> tuple[str | None, str | None]:
             staff_text = f"{staff_display_names[0]} и {staff_display_names[1]}"
         else:
             staff_text = ", ".join(staff_display_names)
+
 
         return (
             None,
