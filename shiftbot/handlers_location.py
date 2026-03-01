@@ -489,6 +489,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             return
 
         session.active_staff_name = staff.get("full_name") or staff.get("name") or session.active_staff_name
+        session.active_staff_phone = str(staff.get("phone") or "").strip() or session.active_staff_phone
 
         try:
             oc_staff_id = int(staff["staff_id"])
@@ -798,6 +799,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         session.active_point_radius = base_radius
         session.active_role = role
         session.active_staff_name = staff.get("full_name") or staff.get("name") or session.active_staff_name
+        session.active_staff_phone = str(staff.get("phone") or "").strip() or session.active_staff_phone
         session.active_started_at = datetime.now().strftime("%Y-%m-%d %H:%M")
         session.consecutive_out_count = 0
         session.out_streak = 0
@@ -819,18 +821,14 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         session.mode = MODE_IDLE
         _clear_unknown_acc_state(context.application, session.active_shift_id)
 
-        success_message = (
-            "✅ Вы в рабочей зоне "
-            f"(≈{dist_m:.0f} м, допустимо {effective_radius:.0f} м).\n"
-        )
-        if accuracy is None:
-            success_message += "точность не передана Telegram, проверяем по расстоянию.\n"
-        elif accuracy > config.ACCURACY_MAX_M:
-            success_message += f"GPS неточный: {acc_text}м.\n"
-        success_message += "Смена начата. Удачной работы!"
+        success_message = "✅ Вы в рабочей зоне. Смена начата. Удачной работы!"
 
         await status_message.edit_text(success_message)
-        await source_message.reply_text("Главное меню снова доступно ниже.", reply_markup=main_menu_keyboard())
+        try:
+            await status_message.delete()
+        except Exception:
+            pass
+        await source_message.reply_text(success_message, reply_markup=main_menu_keyboard())
 
         # Task 3: Companion notifications
         try:
@@ -849,9 +847,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
                     )
                 ]
 
-                if not colleagues:
-                    await source_message.reply_text("✅ Смена начата! Удачи в работе!")
-                else:
+                if colleagues:
                     names = ", ".join(
                         s.get("full_name") or s.get("staff_name") or f"сотрудник #{s.get('staff_id', '?')}"
                         for s in colleagues
