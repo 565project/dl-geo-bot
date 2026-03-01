@@ -511,10 +511,20 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
                 message.location,
                 staff_id=oc_staff_id,
             )
+            if session.mode == MODE_AWAITING_LOCATION:
+                session.mode = MODE_IDLE
+                session.gate_attempt = 0
+                session.gate_last_reason = None
+            return
         else:
             logger.info("LOCATION_UPDATE no active shift staff_id=%s", oc_staff_id)
 
 
+
+        should_run_geo_gate_check = (not update.edited_message) or session.gate_attempt == 0
+        if not should_run_geo_gate_check:
+            logger.info("GEO_GATE_WAITING_FOR_MANUAL_RECHECK tg=%s", user.id)
+            return
 
         should_run_geo_gate_check = (not update.edited_message) or session.gate_attempt == 0
         if not should_run_geo_gate_check:
@@ -753,8 +763,12 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
                 except (TypeError, ValueError):
                     session.active_shift_id = None
                 session.active_started_at = (error_json or {}).get("started_at") or session.active_started_at
+                session.active = True
+                session.mode = MODE_IDLE
+                session.gate_attempt = 0
+                session.gate_last_reason = None
                 await status_message.edit_text(
-                    f"У вас уже активная смена #{session.active_shift_id or '—'} (с {session.active_started_at or '—'}).",
+                    f"У вас уже активная смена №{session.active_shift_id or '—'} (с {session.active_started_at or '—'}).",
                     reply_markup=active_shift_keyboard(),
                 )
                 return

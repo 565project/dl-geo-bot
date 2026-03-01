@@ -372,7 +372,7 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
         role = (shift or {}).get("role") or session.active_role or "—"
         await msg.reply_text(
             "Смена: активна\n"
-            f"• ID: {shift_id}\n"
+            f"• Номер: {shift_id}\n"
             f"• Точка: {point_name}\n"
             f"• Роль: {ROLE_LABELS.get(role, role)}\n"
             f"• Старт: {started}",
