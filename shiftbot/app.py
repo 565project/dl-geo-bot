@@ -1,4 +1,4 @@
-from telegram import BotCommand, Update
+from telegram import MenuButtonDefault, Update
 from telegram.ext import Application
 
 from shiftbot import config
@@ -103,15 +103,8 @@ class ShiftBotApp:
         return deduped
 
     async def _post_init(self, app: Application) -> None:
-        commands = [
-            BotCommand("start", "Запустить бота и открыть меню"),
-            BotCommand("status", "Показать статус смены"),
-            BotCommand("restart", "Сбросить сценарий"),
-            BotCommand("start_shift", "Начать смену"),
-            BotCommand("stop_shift", "Завершить смену"),
-            BotCommand("help", "Краткая инструкция"),
-        ]
-        await app.bot.set_my_commands(commands)
+        await app.bot.set_my_commands([])
+        await app.bot.set_chat_menu_button(menu_button=MenuButtonDefault())
 
         try:
             await self.oc_client.health_check()
