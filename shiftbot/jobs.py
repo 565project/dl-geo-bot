@@ -148,6 +148,42 @@ def build_job_check_stale(session_store, oc_client, logger):
                 session.out_streak = 0
                 logger.info("STALE user=%s age=%.1f -> UNKNOWN", session.user_id, age)
 
+                logger.info(
+                    "VIOLATION_TICK_PRECHECK user=%s shift_id=%s last_ping_ts=%s last_live_update_ts=%s mode=%s active=%s",
+                    session.user_id,
+                    session.active_shift_id,
+                    session.last_ping_ts,
+                    getattr(session, "last_live_update_ts", 0.0),
+                    getattr(session, "mode", None),
+                    getattr(session, "active", None),
+                )
+                try:
+                    violation_response = await oc_client.violation_tick(session.active_shift_id)
+                except Exception as exc:
+                    violation_response = {"ok": False, "error": str(exc), "decisions": {}}
+                    logger.error("VIOLATION_TICK_FAILED shift_id=%s error=%s", session.active_shift_id, exc)
+                logger.info(
+                    "VIOLATION_TICK_RESPONSE shift_id=%s response=%s",
+                    session.active_shift_id,
+                    str(violation_response)[:500],
+                )
+
+                if isinstance(violation_response, dict) and violation_response.get("error") == "shift_not_active":
+                    logger.warning(
+                        "VIOLATION_TICK_SHIFT_NOT_ACTIVE user=%s shift_id=%s -> stop monitoring",
+                        session.user_id,
+                        session.active_shift_id,
+                    )
+                    _stop_monitoring_session(session)
+                    try:
+                        await context.bot.send_message(
+                            chat_id=session.chat_id,
+                            text="⚠️ Ваша смена завершена администратором. Если это ошибка — свяжитесь с нами.",
+                        )
+                    except Exception as exc:
+                        logger.error("SHIFT_ENDED_NOTIFY_FAIL chat_id=%s error=%s", session.chat_id, exc)
+                    continue
+
                 warn_round = int(getattr(session, "last_out_violation_notified_round", 0) or 0)
 
                 next_round = warn_round + 1
@@ -295,29 +331,10 @@ def build_job_check_stale(session_store, oc_client, logger):
                     shift_id_to_stop,
                     stop_result,
                 )
-                logger.info(
-                    "VIOLATION_TICK_PRECHECK user=%s shift_id=%s last_ping_ts=%s last_live_update_ts=%s mode=%s active=%s",
-                    session.user_id,
-                    session.active_shift_id,
-                    session.last_ping_ts,
-                    getattr(session, "last_live_update_ts", 0.0),
-                    getattr(session, "mode", None),
-                    getattr(session, "active", None),
-                )
-
-                try:
-                    response = await oc_client.violation_tick(session.active_shift_id)
-                except Exception as exc:
-                    logger.error("VIOLATION_TICK_FAILED shift_id=%s error=%s", session.active_shift_id, exc)
-                    continue
+                response = violation_response
 
                 decisions = response.get("decisions", {}) if isinstance(response, dict) else {}
                 admin_chat_ids = response.get("admin_chat_ids", []) if isinstance(response, dict) else []
-                logger.info(
-                    "VIOLATION_TICK_RESPONSE shift_id=%s response=%s",
-                    session.active_shift_id,
-                    str(response)[:500],
-                )
                 logger.info(
                     "VIOLATION_TICK_DECISIONS shift_id=%s decisions=%s admin_chat_ids=%s",
                     session.active_shift_id,
