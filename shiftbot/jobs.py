@@ -180,33 +180,66 @@ def build_job_check_stale(session_store, oc_client, logger):
                     f"Телефон сотрудника: {staff_phone}\n\n"
                     "Требуется ручная проверка по камерам. "
                     "Заявка на подозрение отправлена на сайт для рассмотрения."
+
                 )
                 await notify_admins(
                     context,
                     admin_text,
                     shift_id=shift_id_to_stop,
                     cooldown_key="admin_notify_stale",
-
                 )
 
                 end_at_ts = int(getattr(session, "stale_first_detected_ts", 0.0) or now)
 
                 auto_stopped = False
                 stop_result = None
-                try:
-                    stop_result = await oc_client.shift_end(
-                        {
-                            "shift_id": shift_id_to_stop,
-                            "end_reason": "auto_stale_no_geo_second_notice",
-                            "end_at": end_at_ts,
-                        }
-                    )
-                    auto_stopped = not (stop_result.get("ok") is False and stop_result.get("error"))
-                except Exception as exc:
-                    logger.error(
-                        "AUTO_STOP_STALE_SHIFT_FAILED shift_id=%s error=%s",
+                end_reasons = ["auto_stale_no_geo_second_notice", "auto_violation_out", "manual"]
+                for end_reason in end_reasons:
+                    try:
+                        stop_result = await oc_client.shift_end(
+                            {
+                                "shift_id": shift_id_to_stop,
+                                "end_reason": end_reason,
+                                "end_at": end_at_ts,
+                            }
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "AUTO_STOP_STALE_SHIFT_FAILED shift_id=%s reason=%s error=%s",
+                            shift_id_to_stop,
+                            end_reason,
+                            exc,
+                        )
+                        continue
+
+                    is_error = bool(stop_result.get("ok") is False and stop_result.get("error"))
+                    error_payload = (stop_result.get("json") or {}) if isinstance(stop_result, dict) else {}
+                    error_code = str(error_payload.get("error") or stop_result.get("error") or "").strip().lower()
+
+                    if not is_error:
+                        auto_stopped = True
+                        logger.info(
+                            "AUTO_STOP_STALE_SHIFT_ACCEPTED shift_id=%s reason=%s result=%s",
+                            shift_id_to_stop,
+                            end_reason,
+                            stop_result,
+                        )
+                        break
+
+                    if error_code != "bad_end_reason":
+                        logger.warning(
+                            "AUTO_STOP_STALE_SHIFT_REJECTED shift_id=%s reason=%s error=%s result=%s",
+                            shift_id_to_stop,
+                            end_reason,
+                            error_code,
+                            stop_result,
+                        )
+                        break
+
+                    logger.warning(
+                        "AUTO_STOP_STALE_SHIFT_BAD_REASON shift_id=%s reason=%s -> retry",
                         shift_id_to_stop,
-                        exc,
+                        end_reason,
                     )
 
                 if auto_stopped:
@@ -214,6 +247,7 @@ def build_job_check_stale(session_store, oc_client, logger):
                     session.last_active_shift_refresh_ts = 0.0
                     await _refresh_active_shift_if_needed(session, now)
                     auto_stopped = not bool(session.active_shift_id)
+
 
                 logger.info(
                     "AUTO_STOP_STALE_SHIFT shift_id=%s round=%s auto_stopped=%s result=%s end_at=%s",
@@ -223,7 +257,6 @@ def build_job_check_stale(session_store, oc_client, logger):
                     stop_result,
                     end_at_ts,
                 )
-
 
                 if auto_stopped:
                     _stop_monitoring_session(session)
@@ -245,7 +278,6 @@ def build_job_check_stale(session_store, oc_client, logger):
                     shift_id_to_stop,
                     stop_result,
                 )
-
                 logger.info(
                     "VIOLATION_TICK_PRECHECK user=%s shift_id=%s last_ping_ts=%s last_live_update_ts=%s mode=%s active=%s",
                     session.user_id,
