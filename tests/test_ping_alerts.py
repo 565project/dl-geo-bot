@@ -63,9 +63,9 @@ class PingAlertsTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([m["chat_id"] for m in context.bot.messages], [1001, 1002])
         text = context.bot.messages[0]["text"]
-        self.assertIn("Точка: 29 (Пекарня на Ленина)", text)
-        self.assertIn("• Иванов Иван Иванович — baker", text)
-        self.assertIn("• Петров Петр Петрович — cashier", text)
+        self.assertIn("Точка: Пекарня на Ленина", text)
+        self.assertIn("• Иванов Иван Иванович (ID 1) — baker", text)
+        self.assertIn("• Петров Петр Петрович (ID 2) — cashier", text)
         self.assertIn("5 раз подряд отправлены одинаковые координаты", text)
         self.assertNotIn("chat_id=777", str(context.bot.messages))
 
@@ -96,8 +96,40 @@ class PingAlertsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([m["chat_id"] for m in context.bot.messages], [1001, 1002])
         text = context.bot.messages[0]["text"]
         self.assertIn("Точка: 42", text)
-        self.assertIn("• Сидоров Сидор Сидорович", text)
+        self.assertIn("• Сидоров Сидор Сидорович (ID 3)", text)
         self.assertIn("5 раз подряд отправлены одинаковые координаты", text)
+
+    async def test_admin_same_location_2_supports_cluster_aliases(self):
+        context = DummyContext()
+        logger = DummyLogger()
+
+        response = {
+            "alerts": [
+                {
+                    "type": "admin_same_location_2",
+                    "shift_id": 25,
+                    "point_id": 30,
+                    "point_short_name": "дл 30",
+                    "dead_souls_cluster": {
+                        "staff": [
+                            {"id": 5, "name": "Тестовый Сотрудник"},
+                        ]
+                    },
+                }
+            ]
+        }
+
+        await process_ping_alerts(
+            response=response,
+            context=context,
+            staff_chat_id=777,
+            fallback_shift_id=25,
+            logger=logger,
+        )
+
+        text = context.bot.messages[0]["text"]
+        self.assertIn("Точка: дл 30", text)
+        self.assertIn("• Тестовый Сотрудник (ID 5)", text)
 
     async def test_admin_same_location_2_deduplicates_by_point_not_shift(self):
         context = DummyContext()
