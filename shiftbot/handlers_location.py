@@ -210,6 +210,8 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             logger.warning("PING_ADD_UNAVAILABLE shift_id=%s staff_id=%s", session.active_shift_id, staff_id)
             return
 
+        await enrich_dead_soul_alert_payload(response, session, staff_id)
+
         await process_ping_alerts(
             response=response,
             context=context,
@@ -825,6 +827,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         session.last_admin_alert_at = 0.0
         session.last_out_violation_notified_round = 0
         session.last_unknown_warn_ts = 0.0
+
         session.mode = MODE_IDLE
         _clear_unknown_acc_state(context.application, session.active_shift_id)
 
@@ -836,7 +839,6 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         except Exception:
             pass
         await source_message.reply_text(success_message, reply_markup=main_menu_keyboard())
-
 
         # Task 3: Companion notifications
         try:
@@ -878,6 +880,88 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
                             )
         except Exception as exc:
             logger.warning("COMPANION_NOTIFY_FAILED error=%s", exc)
+
+    async def enrich_dead_soul_alert_payload(response: dict, session, staff_id: int) -> None:
+        if not isinstance(response, dict):
+            return
+        alerts = response.get("alerts") if isinstance(response.get("alerts"), list) else []
+        has_dead_soul_alert = str(response.get("admin_alert") or "") == "admin_same_location_2" or any(
+            isinstance(item, dict) and str(item.get("type") or "") == "admin_same_location_2" for item in alerts
+        )
+        if not has_dead_soul_alert:
+            return
+
+        cluster = response.get("dead_souls_cluster") if isinstance(response.get("dead_souls_cluster"), dict) else {}
+        point_id = (
+            as_int(cluster.get("point_id"))
+            or as_int(response.get("point_id"))
+            or as_int(session.active_point_id)
+            or as_int(session.selected_point_id)
+        )
+        if point_id is None:
+            return
+
+        active_shifts = await oc_client.get_active_shifts_by_point(point_id)
+        if not isinstance(active_shifts, list):
+            active_shifts = []
+
+        staff_by_id = {}
+        for shift in active_shifts:
+            if not isinstance(shift, dict):
+                continue
+            sid = as_int(shift.get("staff_id"))
+            if sid is None:
+                continue
+            name = shift.get("full_name") or shift.get("staff_name") or shift.get("name")
+            if name:
+                staff_by_id[sid] = name
+
+        cluster_staff = cluster.get("staff") if isinstance(cluster.get("staff"), list) else []
+        enriched_staff = []
+        for member in cluster_staff:
+            if not isinstance(member, dict):
+                continue
+            sid = as_int(member.get("staff_id") or member.get("id") or member.get("employee_id"))
+            name = member.get("full_name") or member.get("staff_name") or member.get("name")
+            if not name and sid in staff_by_id:
+                name = staff_by_id[sid]
+            enriched_staff.append({"staff_id": sid, "full_name": name, "role": member.get("role")})
+
+        if not enriched_staff:
+            for shift in active_shifts:
+                if not isinstance(shift, dict):
+                    continue
+                sid = as_int(shift.get("staff_id"))
+                if sid is None:
+                    continue
+                name = shift.get("full_name") or shift.get("staff_name") or shift.get("name")
+                if not name and sid == as_int(staff_id):
+                    name = session.active_staff_name
+                enriched_staff.append({"staff_id": sid, "full_name": name, "role": shift.get("role")})
+
+        point_label = (
+            cluster.get("point_name")
+            or cluster.get("point_short_name")
+            or response.get("point_name")
+            or response.get("point_short_name")
+            or session.active_point_name
+        )
+        if not point_label:
+            for shift in active_shifts:
+                if not isinstance(shift, dict):
+                    continue
+                point_label = shift.get("point_name") or shift.get("point_short_name") or shift.get("point_title")
+                if point_label:
+                    break
+
+        response["point_id"] = point_id
+        if point_label:
+            response["point_name"] = point_label
+        response["dead_souls_cluster"] = {
+            "point_id": point_id,
+            "point_name": point_label,
+            "staff": enriched_staff,
+        }
 
     async def recheck_location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query

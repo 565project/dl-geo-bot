@@ -57,36 +57,57 @@ def _alert_text(alert: dict) -> tuple[str | None, str | None]:
     if alert_type == "admin_same_location_2":
         cluster = alert.get("dead_souls_cluster") if isinstance(alert.get("dead_souls_cluster"), dict) else {}
         cluster_point_id = cluster.get("point_id") or point_id
-        point_name = cluster.get("point_name") or alert.get("point_name")
-        point_text = f"{cluster_point_id}"
+        point_name = (
+            cluster.get("point_name")
+            or cluster.get("point_short_name")
+            or cluster.get("name")
+            or alert.get("point_name")
+            or alert.get("point_short_name")
+            or alert.get("point_title")
+        )
+        point_dl = cluster.get("point_dl") or alert.get("point_dl")
         if point_name:
-            point_text = f"{cluster_point_id} ({point_name})"
+            point_text = str(point_name)
+        elif point_dl:
+            point_text = f"ДЛ {point_dl}"
+        else:
+            point_text = f"{cluster_point_id}"
 
         staff = cluster.get("staff") if isinstance(cluster.get("staff"), list) else []
-        staff_lines = []
+        staff_display_names = []
         for member in staff:
             if not isinstance(member, dict):
                 continue
-            member_name = member.get("full_name") or member.get("staff_name")
-            member_id = member.get("staff_id") or "—"
-            role = member.get("role")
-            name_text = member_name or f"ID {member_id}"
-            role_text = f" — {role}" if role else ""
-            staff_lines.append(f"• {name_text}{role_text}")
+            member_name = member.get("full_name") or member.get("staff_name") or member.get("name")
+            member_id = member.get("staff_id") or member.get("id") or member.get("employee_id") or "—"
+            if member_name and member_id != "—":
+                name_text = f"{member_name} (ID {member_id})"
+            elif member_name:
+                name_text = str(member_name)
+            else:
+                name_text = f"ID {member_id}"
+            staff_display_names.append(name_text)
 
-        if not staff_lines:
-            staff_lines.append(f"• {full_name or f'ID {staff_id}'}")
+        if not staff_display_names:
+            if full_name and staff_id != "—":
+                staff_display_names.append(f"{full_name} (ID {staff_id})")
+            else:
+                staff_display_names.append(full_name or f"ID {staff_id}")
 
-        staff_block = "\n".join(staff_lines)
+        staff_display_names = list(dict.fromkeys(staff_display_names))
+        if len(staff_display_names) == 1:
+            staff_text = staff_display_names[0]
+        elif len(staff_display_names) == 2:
+            staff_text = f"{staff_display_names[0]} и {staff_display_names[1]}"
+        else:
+            staff_text = ", ".join(staff_display_names)
 
         return (
             None,
             "⚠ Подозрительная гео-активность\n"
-            f"Точка: {point_text}\n"
-            "Сотрудники в кластере:\n"
-            f"{staff_block}\n"
-            "5 раз подряд отправлены одинаковые координаты.\n"
-            "Требуется проверка (возможна фиксация с одного устройства).",
+            f"В точке: {point_text}\n"
+            f"Сотрудники: {staff_text}\n"
+            "Запустили смены с 1 телефона — необходима проверка и отчет на сайте.",
         )
     return None, None
 

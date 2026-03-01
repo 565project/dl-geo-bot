@@ -63,10 +63,9 @@ class PingAlertsTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([m["chat_id"] for m in context.bot.messages], [1001, 1002])
         text = context.bot.messages[0]["text"]
-        self.assertIn("Точка: 29 (Пекарня на Ленина)", text)
-        self.assertIn("• Иванов Иван Иванович — baker", text)
-        self.assertIn("• Петров Петр Петрович — cashier", text)
-        self.assertIn("5 раз подряд отправлены одинаковые координаты", text)
+        self.assertIn("В точке: Пекарня на Ленина", text)
+        self.assertIn("Сотрудники: Иванов Иван Иванович (ID 1) и Петров Петр Петрович (ID 2)", text)
+        self.assertIn("Запустили смены с 1 телефона", text)
         self.assertNotIn("chat_id=777", str(context.bot.messages))
 
     async def test_admin_same_location_2_fallback_to_single_staff(self):
@@ -95,9 +94,67 @@ class PingAlertsTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([m["chat_id"] for m in context.bot.messages], [1001, 1002])
         text = context.bot.messages[0]["text"]
-        self.assertIn("Точка: 42", text)
-        self.assertIn("• Сидоров Сидор Сидорович", text)
-        self.assertIn("5 раз подряд отправлены одинаковые координаты", text)
+        self.assertIn("В точке: 42", text)
+        self.assertIn("Сотрудники: Сидоров Сидор Сидорович (ID 3)", text)
+        self.assertIn("Запустили смены с 1 телефона", text)
+
+    async def test_admin_same_location_2_supports_cluster_aliases(self):
+        context = DummyContext()
+        logger = DummyLogger()
+
+        response = {
+            "alerts": [
+                {
+                    "type": "admin_same_location_2",
+                    "shift_id": 25,
+                    "point_id": 30,
+                    "point_short_name": "дл 30",
+                    "dead_souls_cluster": {
+                        "staff": [
+                            {"id": 5, "name": "Тестовый Сотрудник"},
+                        ]
+                    },
+                }
+            ]
+        }
+
+        await process_ping_alerts(
+            response=response,
+            context=context,
+            staff_chat_id=777,
+            fallback_shift_id=25,
+            logger=logger,
+        )
+
+        text = context.bot.messages[0]["text"]
+        self.assertIn("В точке: дл 30", text)
+        self.assertIn("Сотрудники: Тестовый Сотрудник (ID 5)", text)
+
+    async def test_admin_same_location_2_without_staff_shows_id_fallback(self):
+        context = DummyContext()
+        logger = DummyLogger()
+
+        response = {
+            "alerts": [
+                {
+                    "type": "admin_same_location_2",
+                    "shift_id": 66,
+                    "point_id": 30,
+                }
+            ]
+        }
+
+        await process_ping_alerts(
+            response=response,
+            context=context,
+            staff_chat_id=777,
+            fallback_shift_id=66,
+            logger=logger,
+        )
+
+        text = context.bot.messages[0]["text"]
+        self.assertIn("В точке: 30", text)
+        self.assertIn("Сотрудники: ID —", text)
 
     async def test_admin_same_location_2_deduplicates_by_point_not_shift(self):
         context = DummyContext()
