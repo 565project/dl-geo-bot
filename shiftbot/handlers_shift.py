@@ -20,14 +20,13 @@ BTN_EDIT_DATA = "✏️ Изменить данные"
 BTN_HELP = "❓ Инструкция"
 BTN_REPORT_ERROR = "🐞 Сообщить об ошибке"
 BTN_RESTART = "🔄 Рестарт"
-BTN_SEND_LOCATION = "📍 Отправить геопозицию"
 
 UNKNOWN_ACC_STATE_KEY = "unknown_acc_state_by_shift"
 
 ROLE_LABELS = {
-    "baker": "Повар",
+    "baker": "Пекарь",
     "cashier": "Кассир",
-    "both": "Кассир+Повар",
+    "both": "Кассир+Пекарь",
 }
 
 DL_NUMBER_RE = re.compile(r"\bдл\s*(\d+)\b", re.IGNORECASE)
@@ -69,10 +68,6 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         one_time_keyboard=False,
     )
-
-
-def location_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup([[KeyboardButton(BTN_SEND_LOCATION, request_location=True)]], resize_keyboard=True, one_time_keyboard=False)
 
 
 def api_retry_keyboard(callback_data: str) -> InlineKeyboardMarkup:
@@ -420,8 +415,8 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
             "1) Нажмите «🟢 Начать смену».\n"
             "2) Отправьте номер точки цифрой.\n"
             "3) Выберите роль.\n"
-            "4) Нажмите «📍 Отправить геопозицию».\n"
-            "5) В Telegram выберите «Транслировать геопозицию» → 8 часов.",
+            "4) Нажмите скрепку в Telegram и откройте «Геопозиция».\n"
+            "5) Выберите «Транслировать геопозицию» со сроком «Пока не отключу».",
             reply_markup=main_menu_keyboard(),
         )
 
@@ -585,8 +580,8 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
             keyboard = InlineKeyboardMarkup(
                 [
                     [InlineKeyboardButton("Кассир", callback_data="role:cashier")],
-                    [InlineKeyboardButton("Повар", callback_data="role:baker")],
-                    [InlineKeyboardButton("Кассир+Повар", callback_data="role:both")],
+                    [InlineKeyboardButton("Пекарь", callback_data="role:baker")],
+                    [InlineKeyboardButton("Кассир+Пекарь", callback_data="role:both")],
                 ]
             )
             await msg.reply_text("Выберите роль:", reply_markup=keyboard)
@@ -613,12 +608,10 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
         session.mode = MODE_AWAITING_LOCATION
         address = session.selected_point_address or "адрес не указан"
         await query.message.reply_text(
-            f"Вы планируете начать смену на {session.selected_point_name or '—'} ({address}) в роли {ROLE_LABELS.get(role, role)}. "
-            "Чтобы начать — отправьте Live Location (8 часов)."
-        )
-        await query.message.reply_text(
-            "В Telegram нажмите скрепку → Геопозиция → Транслировать геопозицию → 8 часов.",
-            reply_markup=location_keyboard(),
+            f"Вы планируете начать смену на {session.selected_point_name or '—'} ({address}) в роли {ROLE_LABELS.get(role, role)}.\n\n"
+            "Чтобы начать, отправьте трансляцию геопозиции со сроком «Пока не отключу» — так мы сможем подтвердить, "
+            "что вы были в рабочей зоне в течение рабочего дня.\n\n"
+            "Как отправить: нажмите скрепку в Telegram → «Геопозиция» → «Транслировать геопозицию» → «Пока не отключу»."
         )
 
     async def action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -634,9 +627,6 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
         data = query.data
         if data == "change_point":
             await ask_points(update, context)
-            return
-        if data == "send_location":
-            await query.message.reply_text("Нажмите кнопку ниже и отправьте геопозицию.", reply_markup=location_keyboard())
             return
         if data == "retry_points":
             await ask_points(update, context)
@@ -664,5 +654,5 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
         CommandHandler("test_ping_stop", cmd_test_ping_stop),
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text),
         CallbackQueryHandler(role_callback, pattern=r"^role:"),
-        CallbackQueryHandler(action_callback, pattern=r"^(change_point|send_location|report_issue|retry_points|retry_stop_shift|stop_shift_now|show_status)$"),
+        CallbackQueryHandler(action_callback, pattern=r"^(change_point|report_issue|retry_points|retry_stop_shift|stop_shift_now|show_status)$"),
     ]
