@@ -502,25 +502,10 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         else:
             logger.info("LOCATION_UPDATE no active shift staff_id=%s", oc_staff_id)
 
-        if session.mode != MODE_AWAITING_LOCATION:
-            return
 
-        if update.edited_message:
+        if session.mode == MODE_AWAITING_LOCATION:
             logger.info("GEO_GATE_WAITING_FOR_MANUAL_RECHECK tg=%s", user.id)
-            return
-
-        status_message = await message.reply_text("⏳ Проверяем геопозицию...")
-        await process_geo_gate_check(
-            context=context,
-            session=session,
-            staff=staff,
-            status_message=status_message,
-            source_message=message,
-            user_id=user.id,
-            lat=lat,
-            lon=lon,
-            accuracy=acc,
-        )
+        return
 
     async def process_geo_gate_check(
         *,
