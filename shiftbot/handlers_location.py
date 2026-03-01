@@ -9,7 +9,15 @@ from shiftbot import config
 from shiftbot.geo import haversine_m
 from shiftbot.handlers_shift import active_shift_keyboard, main_menu_keyboard
 from shiftbot.live_registry import LIVE_REGISTRY
-from shiftbot.models import MODE_AWAITING_LOCATION, MODE_IDLE, STATUS_IN, STATUS_OUT, STATUS_UNKNOWN
+from shiftbot.models import (
+    MODE_AWAITING_LOCATION,
+    MODE_CHOOSE_POINT,
+    MODE_CHOOSE_ROLE,
+    MODE_IDLE,
+    STATUS_IN,
+    STATUS_OUT,
+    STATUS_UNKNOWN,
+)
 from shiftbot.opencart_client import ApiUnavailableError
 from shiftbot.ping_alerts import process_ping_alerts
 from shiftbot.violation_alerts import maybe_send_admin_notify_from_decision
@@ -471,6 +479,10 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         session.last_lon = lon
         session.last_acc = float(acc) if acc is not None else None
 
+        if session.mode in {MODE_CHOOSE_POINT, MODE_CHOOSE_ROLE}:
+            logger.info("LOCATION_UPDATE_IGNORED mode=%s tg=%s", session.mode, user.id)
+            return
+
         staff = await oc_client.get_staff_by_telegram(user.id)
         if not staff:
             logger.info("LOCATION_UPDATE staff_not_found tg=%s", user.id)
@@ -503,6 +515,11 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             logger.info("LOCATION_UPDATE no active shift staff_id=%s", oc_staff_id)
 
         if session.mode != MODE_AWAITING_LOCATION:
+            return
+
+        should_run_geo_gate_check = (not update.edited_message) or session.gate_attempt == 0
+        if not should_run_geo_gate_check:
+            logger.info("GEO_GATE_WAITING_FOR_MANUAL_RECHECK tg=%s", user.id)
             return
 
         status_message = await message.reply_text("⏳ Проверяем геопозицию...")
@@ -551,8 +568,6 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         point_lon_raw = as_float(session.selected_point_lon)
         base_radius = as_float(session.selected_point_radius) or float(config.DEFAULT_RADIUS_M)
         mode = session.mode
-        acc_text = f"{accuracy:.0f}" if accuracy is not None else "неизвестна"
-
         try:
             oc_staff_id = int(staff["staff_id"])
             tg_user_id = int(staff["telegram_user_id"])
@@ -568,8 +583,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             logger.info("[GEO_GATE] missing point coords, state=%s", state_snapshot)
             _geolog(f"[GEO_GATE] result=UNKNOWN reason=point_coords_missing state={state_snapshot}")
             await status_message.edit_text(
-                "Не удалось определить координаты точки. Выберите другую точку.\n"
-                f"Диагностика: dist≈—м, r={base_radius:.0f}м, acc={acc_text}"
+                "Не удалось определить координаты точки. Выберите другую точку."
             )
             return
 
@@ -623,7 +637,6 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         )
 
         acc_text = f"{accuracy:.0f}" if accuracy is not None else "неизвестна"
-        acc_missing_note = "\nℹ️ точность не передана Telegram, проверяем по расстоянию."
         if accuracy is None:
             logger.info("[GEO_GATE] acc=None, continue with distance check")
 
@@ -652,16 +665,12 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             )
             _geolog(f"[GEO_GATE] result=OUT reason={out_reason}")
 
-            details = f"Диагностика: dist≈{dist_m:.0f}м, r={effective_radius:.0f}м, acc={acc_text}"
-            if accuracy is None:
-                details += acc_missing_note
-
             await status_message.edit_text(
                 "Мы вас не видим в рабочей зоне, до этой зоны не хватает примерно "
                 f"{max(dist_m - effective_radius, 0):.0f} м.\n\n"
                 "Если вы выбрали не ту точку — просто выберите снова. "
                 "Но если вы в рабочей зоне и считаете, что это ошибка — сообщите руководителю вашей точки, чтобы поставить смену.\n\n"
-                f"{details}",
+                "Проверка выполняется только по кнопке «Проверить повторно».",
                 reply_markup=retry_inline_keyboard(include_issue=True),
             )
             return
