@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import re
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
@@ -28,6 +29,27 @@ ROLE_LABELS = {
     "cashier": "Кассир",
     "both": "Кассир+Повар",
 }
+
+DL_NUMBER_RE = re.compile(r"\bдл\s*(\d+)\b", re.IGNORECASE)
+
+
+def extract_dl_number(point: dict) -> int | None:
+    short_name = str(point.get("short_name") or point.get("name") or "")
+    match = DL_NUMBER_RE.search(short_name)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def sort_points_by_dl_number(points: list[dict]) -> list[dict]:
+    def sort_key(point: dict) -> tuple[bool, int, str]:
+        dl_number = extract_dl_number(point)
+        return (dl_number is None, dl_number or 0, str(point.get("short_name") or ""))
+
+    return sorted(points, key=sort_key)
 
 
 def active_shift_keyboard() -> InlineKeyboardMarkup:
@@ -119,6 +141,9 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
 
     def format_point_line(i: int, point: dict) -> str:
         address = (point.get("address") or point.get("link_yandex") or "адрес не указан").strip()
+        dl_number = extract_dl_number(point)
+        if dl_number is not None:
+            return f"{dl_number}) {point.get('short_name') or f'ДЛ {dl_number}'} — {address}"
         return f"{i}) {point.get('short_name') or f'Точка {i}'} — {address}"
 
     async def sync_active_shift(session, staff_id: int) -> dict | None:
@@ -146,9 +171,19 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
             reply_markup=active_shift_keyboard(),
         )
 
-    async def save_selected_point(msg, session, point_index: int) -> bool:
-        idx = point_index - 1
-        if idx < 0 or idx >= len(session.points_cache):
+    def find_point_index_by_input(points: list[dict], selected_number: int) -> int | None:
+        for idx, point in enumerate(points):
+            if extract_dl_number(point) == selected_number:
+                return idx
+
+        fallback_idx = selected_number - 1
+        if 0 <= fallback_idx < len(points):
+            return fallback_idx
+        return None
+
+    async def save_selected_point(msg, session, point_number: int) -> bool:
+        idx = find_point_index_by_input(session.points_cache, point_number)
+        if idx is None:
             await msg.reply_text("Точка не найдена. Попробуйте выбрать другую.")
             return False
 
@@ -181,7 +216,7 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
 
         session_store.patch(
             session,
-            selected_point_index=point_index,
+            selected_point_index=point_number,
             selected_point_id=as_int(point.get("id")),
             selected_point_name=point.get("short_name") or point.get("name"),
             selected_point_address=point.get("address") or point.get("link_yandex") or "",
@@ -206,7 +241,7 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
             await msg.reply_text("Сайт временно недоступен (ошибка сети). Попробуйте ещё раз через 10 секунд.", reply_markup=api_retry_keyboard("retry_points"))
             return
 
-        points = [normalize_point(point) for point in raw_points]
+        points = sort_points_by_dl_number([normalize_point(point) for point in raw_points])
         if not points:
             await msg.reply_text("Сейчас нет доступных точек. Попробуйте позже.", reply_markup=main_menu_keyboard())
             return
@@ -538,11 +573,11 @@ def build_shift_handlers(session_store, staff_service, oc_client, dead_soul_dete
             if not text.isdigit():
                 await msg.reply_text("Чтобы выбрать точку — отправьте номер цифрой")
                 return
-            point_index = int(text)
-            if point_index < 1 or point_index > len(session.points_cache):
-                await msg.reply_text(f"Номер вне диапазона. Введите число от 1 до {len(session.points_cache)}.")
+            point_number = int(text)
+            if point_number < 1:
+                await msg.reply_text("Введите корректный номер точки (например, 1, 2, 5, 6).")
                 return
-            if not await save_selected_point(msg, session, point_index):
+            if not await save_selected_point(msg, session, point_number):
                 lines = "\n".join(format_point_line(i + 1, point) for i, point in enumerate(session.points_cache))
                 await msg.reply_text(f"Адреса, доступные для работы:\n{lines}\n")
                 await msg.reply_text("Чтобы выбрать точку — отправьте номер цифрой")
