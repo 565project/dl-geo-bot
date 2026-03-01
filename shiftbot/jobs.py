@@ -227,6 +227,26 @@ def build_job_check_stale(session_store, oc_client, logger):
 
                 end_at_ts = int(getattr(session, "stale_first_detected_ts", 0.0) or now)
 
+                logger.info(
+                    "VIOLATION_TICK_SECOND_NOTICE shift_id=%s round=%s",
+                    shift_id_to_stop,
+                    next_round,
+                )
+                try:
+                    pre_stop_violation_response = await oc_client.violation_tick(shift_id_to_stop)
+                    logger.info(
+                        "VIOLATION_TICK_SECOND_NOTICE_RESPONSE shift_id=%s response=%s",
+                        shift_id_to_stop,
+                        str(pre_stop_violation_response)[:500],
+                    )
+                except Exception as exc:
+                    pre_stop_violation_response = {"ok": False, "error": str(exc), "decisions": {}}
+                    logger.error(
+                        "VIOLATION_TICK_SECOND_NOTICE_FAILED shift_id=%s error=%s",
+                        shift_id_to_stop,
+                        exc,
+                    )
+
                 auto_stopped = False
                 stop_result = None
                 end_reasons = ["auto_stale_no_geo_second_notice", "auto_violation_out", "manual"]
@@ -331,7 +351,9 @@ def build_job_check_stale(session_store, oc_client, logger):
                     shift_id_to_stop,
                     stop_result,
                 )
+
                 response = violation_response
+
 
                 decisions = response.get("decisions", {}) if isinstance(response, dict) else {}
                 admin_chat_ids = response.get("admin_chat_ids", []) if isinstance(response, dict) else []
