@@ -830,6 +830,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             pass
         await source_message.reply_text(success_message, reply_markup=main_menu_keyboard())
 
+
         # Task 3: Companion notifications
         try:
             current_point_id = session.active_point_id

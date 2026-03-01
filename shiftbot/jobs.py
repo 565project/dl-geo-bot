@@ -149,6 +149,7 @@ def build_job_check_stale(session_store, oc_client, logger):
                 logger.info("STALE user=%s age=%.1f -> UNKNOWN", session.user_id, age)
 
                 warn_round = int(getattr(session, "last_out_violation_notified_round", 0) or 0)
+
                 next_round = warn_round + 1
                 session.last_out_violation_notified_round = next_round
 
@@ -179,6 +180,7 @@ def build_job_check_stale(session_store, oc_client, logger):
                     f"Телефон сотрудника: {staff_phone}\n\n"
                     "Требуется ручная проверка по камерам. "
                     "Заявка на подозрение отправлена на сайт для рассмотрения."
+
                 )
                 await notify_admins(
                     context,
@@ -245,6 +247,7 @@ def build_job_check_stale(session_store, oc_client, logger):
                     session.last_active_shift_refresh_ts = 0.0
                     await _refresh_active_shift_if_needed(session, now)
                     auto_stopped = not bool(session.active_shift_id)
+
 
                 logger.info(
                     "AUTO_STOP_STALE_SHIFT shift_id=%s round=%s auto_stopped=%s result=%s end_at=%s",
@@ -331,6 +334,7 @@ def build_job_check_stale(session_store, oc_client, logger):
                 if decisions.get("admin_notify"):
                     shift_id = session.active_shift_id
                     staff_name = getattr(session, "active_staff_name", None) or f"{session.user_id}"
+
                     point_label = getattr(session, "active_point_name", None) or (
                         f"id={getattr(session, 'active_point_id', None)}"
                         if getattr(session, "active_point_id", None) is not None
@@ -340,6 +344,7 @@ def build_job_check_stale(session_store, oc_client, logger):
 
                     admin_text = (
                         f"Сотрудник {staff_name} пропал с радаров на точке {point_label}.\n"
+
                         f"Телефон сотрудника: {staff_phone}\n\n"
                         "Требуется ручная проверка по камерам. "
                         "Заявка на подозрение отправлена на сайт для рассмотрения."
