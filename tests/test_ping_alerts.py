@@ -99,6 +99,52 @@ class PingAlertsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("• Сидоров Сидор Сидорович", text)
         self.assertIn("5 раз подряд отправлены одинаковые координаты", text)
 
+    async def test_admin_same_location_2_deduplicates_by_point_not_shift(self):
+        context = DummyContext()
+        logger = DummyLogger()
+
+        response_staff_1 = {
+            "alerts": [
+                {
+                    "type": "admin_same_location_2",
+                    "shift_id": 122,
+                    "point_id": 30,
+                    "staff_id": 1,
+                    "full_name": "Сотрудник 1",
+                }
+            ]
+        }
+        response_staff_2 = {
+            "alerts": [
+                {
+                    "type": "admin_same_location_2",
+                    "shift_id": 123,
+                    "point_id": 30,
+                    "staff_id": 2,
+                    "full_name": "Сотрудник 2",
+                }
+            ]
+        }
+
+        await process_ping_alerts(
+            response=response_staff_1,
+            context=context,
+            staff_chat_id=777,
+            fallback_shift_id=122,
+            logger=logger,
+        )
+        await process_ping_alerts(
+            response=response_staff_2,
+            context=context,
+            staff_chat_id=888,
+            fallback_shift_id=123,
+            logger=logger,
+        )
+
+        # одно уведомление на админа по точке, а не по каждой смене
+        self.assertEqual([m["chat_id"] for m in context.bot.messages], [1001, 1002])
+        self.assertIn(30, context.application.bot_data.get("dead_soul_recent_alert_by_point", {}))
+
 
 if __name__ == "__main__":
     unittest.main()

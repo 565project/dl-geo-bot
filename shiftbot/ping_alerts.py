@@ -3,6 +3,7 @@ import time
 from telegram.ext import ContextTypes
 
 PING_ALERT_COOLDOWN_KEY = "ping_alert_cooldowns"
+DEAD_SOUL_RECENT_ALERTS_KEY = "dead_soul_recent_alert_by_point"
 STAFF_ALERT_COOLDOWN_SEC = 120
 DEFAULT_ALERT_COOLDOWN_SEC = 300
 
@@ -90,6 +91,27 @@ def _alert_text(alert: dict) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _dead_soul_point_id(alert: dict) -> int | None:
+    point_id = alert.get("point_id")
+    cluster = alert.get("dead_souls_cluster") if isinstance(alert.get("dead_souls_cluster"), dict) else None
+    if isinstance(cluster, dict) and cluster.get("point_id") is not None:
+        point_id = cluster.get("point_id")
+    return _as_int(point_id)
+
+
+def _cooldown_key(alert: dict, fallback_shift_id: int | None) -> tuple:
+    alert_type = str(alert.get("type") or "")
+    if alert_type == "admin_same_location_2":
+        point_id = _dead_soul_point_id(alert)
+        if point_id is not None:
+            return (alert_type, "point", point_id)
+
+    shift_id = _as_int(alert.get("shift_id"))
+    if shift_id is None:
+        shift_id = fallback_shift_id
+    return (alert_type, shift_id)
+
+
 
 
 def _admin_chat_ids_from_alert(alert: dict) -> list[int]:
@@ -159,7 +181,7 @@ async def process_ping_alerts(
         shift_id = _as_int(raw_alert.get("shift_id"))
         if shift_id is None:
             shift_id = fallback_shift_id
-        cooldown_key = (alert_type, shift_id)
+        cooldown_key = _cooldown_key(raw_alert, fallback_shift_id)
         cooldown_sec = _alert_cooldown_sec(alert_type)
 
         last_sent_at = cooldowns.get(cooldown_key)
@@ -189,4 +211,9 @@ async def process_ping_alerts(
                 alert_type,
                 admin_chat_ids,
             )
+            if alert_type == "admin_same_location_2":
+                point_id = _dead_soul_point_id(raw_alert)
+                if point_id is not None:
+                    dead_soul_recent = context.application.bot_data.setdefault(DEAD_SOUL_RECENT_ALERTS_KEY, {})
+                    dead_soul_recent[point_id] = now
             cooldowns[cooldown_key] = now

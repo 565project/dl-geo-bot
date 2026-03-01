@@ -19,7 +19,7 @@ from shiftbot.models import (
     STATUS_UNKNOWN,
 )
 from shiftbot.opencart_client import ApiUnavailableError
-from shiftbot.ping_alerts import process_ping_alerts
+from shiftbot.ping_alerts import DEAD_SOUL_RECENT_ALERTS_KEY, process_ping_alerts
 from shiftbot.violation_alerts import maybe_send_admin_notify_from_decision
 from shiftbot.admin_notify import notify_admins
 
@@ -148,10 +148,15 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         session.active_role = role_map.get(str(shift.get("role") or "").lower(), session.active_role)
         session.active_staff_name = shift.get("staff_name") or shift.get("full_name") or session.active_staff_name
 
-    async def ensure_active_shift(session, staff_id: int) -> dict | None:
+    async def ensure_active_shift(session, staff_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict | None:
         shift = await oc_client.get_active_shift_by_staff(staff_id)
         if not isinstance(shift, dict):
+            previous_shift_id = session.active_shift_id
             clear_active_shift(session)
+            if previous_shift_id:
+                LIVE_REGISTRY.remove_shift(previous_shift_id)
+                dead_soul_detector.remove_shift(previous_shift_id)
+                _clear_unknown_acc_state(context.application, previous_shift_id)
             return None
 
         sync_session_from_shift(session, shift)
@@ -431,6 +436,12 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             )
 
         if alerts:
+            dead_soul_recent = context.application.bot_data.setdefault(DEAD_SOUL_RECENT_ALERTS_KEY, {})
+            last_point_alert_ts = dead_soul_recent.get(point_id)
+            if isinstance(last_point_alert_ts, (int, float)) and (now - float(last_point_alert_ts)) < 600:
+                logger.info("DEAD_SOUL_ALERT_SKIPPED point_id=%s reason=recent_admin_same_location_2", point_id)
+                return
+
             point_label = session.active_point_name or (f"id={point_id}" if point_id is not None else "—")
             pair_lines = []
             for alert in alerts:
@@ -449,6 +460,8 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             logger.info("DEAD_SOUL_ALERT point_id=%s pairs=%s", point_id, pairs_for_log)
             logger.info("ADMIN_ALERT_SENT alert_type=admin_same_location_5 point_id=%s pairs=%s", point_id, pairs_for_log)
             await notify_admins(context, alert_text)
+            if point_id is not None:
+                dead_soul_recent[point_id] = now
 
     async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
@@ -498,7 +511,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             return
 
         try:
-            await ensure_active_shift(session, oc_staff_id)
+            await ensure_active_shift(session, oc_staff_id, context)
         except ApiUnavailableError:
             logger.warning("ACTIVE_SHIFT_RECOVERY_FAILED staff_id=%s", oc_staff_id)
             return
@@ -522,14 +535,8 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
 
 
 
-        should_run_geo_gate_check = (not update.edited_message) or session.gate_attempt == 0
-        if not should_run_geo_gate_check:
-            logger.info("GEO_GATE_WAITING_FOR_MANUAL_RECHECK tg=%s", user.id)
-            return
-
-        should_run_geo_gate_check = (not update.edited_message) or session.gate_attempt == 0
-        if not should_run_geo_gate_check:
-            logger.info("GEO_GATE_WAITING_FOR_MANUAL_RECHECK tg=%s", user.id)
+        if session.mode != MODE_AWAITING_LOCATION:
+            logger.info("LOCATION_UPDATE_IGNORED mode=%s tg=%s", session.mode, user.id)
             return
 
         should_run_geo_gate_check = (not update.edited_message) or session.gate_attempt == 0
