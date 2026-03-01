@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes, MessageHandler, filters
+from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 from shiftbot import config
 from shiftbot.geo import haversine_m
@@ -89,7 +89,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
 
     def retry_inline_keyboard(include_issue: bool = False) -> InlineKeyboardMarkup:
         rows = [
-            [InlineKeyboardButton("📍 Отправить ещё раз", callback_data="send_location")],
+            [InlineKeyboardButton("🔄 Проверить повторно", callback_data="recheck_location")],
             [InlineKeyboardButton("🔁 Сменить точку", callback_data="change_point")],
         ]
         if include_issue:
@@ -467,6 +467,9 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
 
         session = session_store.get_or_create(user.id, chat.id)
         session.last_live_update_ts = time.time()
+        session.last_lat = lat
+        session.last_lon = lon
+        session.last_acc = float(acc) if acc is not None else None
 
         staff = await oc_client.get_staff_by_telegram(user.id)
         if not staff:
@@ -502,6 +505,31 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         if session.mode != MODE_AWAITING_LOCATION:
             return
 
+        status_message = await message.reply_text("⏳ Проверяем геопозицию...")
+        await process_geo_gate_check(
+            context=context,
+            session=session,
+            staff=staff,
+            status_message=status_message,
+            source_message=message,
+            user_id=user.id,
+            lat=lat,
+            lon=lon,
+            accuracy=acc,
+        )
+
+    async def process_geo_gate_check(
+        *,
+        context: ContextTypes.DEFAULT_TYPE,
+        session,
+        staff: dict,
+        status_message,
+        source_message,
+        user_id: int,
+        lat: float,
+        lon: float,
+        accuracy: float | None,
+    ) -> None:
         log = logging.getLogger("geo_gate")
         log.setLevel(logging.INFO)
 
@@ -513,23 +541,20 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             print(msg, flush=True)
 
         if session.selected_role is None or session.selected_point_id is None:
-            await message.reply_text("Сначала выберите точку и роль.", reply_markup=main_menu_keyboard())
+            await source_message.reply_text("Сначала выберите точку и роль.", reply_markup=main_menu_keyboard())
             session_store.reset_flow(session)
             return
 
-        status_message = await message.reply_text("⏳ Проверяем геопозицию...")
-
-        accuracy = acc
         session.last_accuracy_m = float(accuracy) if accuracy is not None else None
 
         point_lat_raw = as_float(session.selected_point_lat)
         point_lon_raw = as_float(session.selected_point_lon)
         base_radius = as_float(session.selected_point_radius) or float(config.DEFAULT_RADIUS_M)
-        user_id = user.id
         mode = session.mode
         acc_text = f"{accuracy:.0f}" if accuracy is not None else "неизвестна"
 
         try:
+            oc_staff_id = int(staff["staff_id"])
             tg_user_id = int(staff["telegram_user_id"])
         except (KeyError, TypeError, ValueError):
             logger.error("GEO_GATE_STAFF_IDS_INVALID staff=%s", staff)
@@ -563,14 +588,14 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         )
 
         attempt = max(session.gate_attempt, 0)
-        effective_radius = base_radius + (attempt * config.GATE_RADIUS_STEP_M)
+        effective_radius = base_radius
         dist_m = haversine_m(lat, lon, point_lat, point_lon)
         session.last_distance_m = dist_m
         attempt_num = attempt + 1
 
         _geolog(
             f"[GEO_GATE] user={user_id} staff_id={oc_staff_id} tg_user_id={tg_user_id} "
-            f"mode={mode} attempt={attempt_num}/{config.GATE_MAX_ATTEMPTS} "
+            f"mode={mode} attempt={attempt_num}/1 "
             f"user=({lat:.7f},{lon:.7f}) "
             f"point=({point_lat:.7f},{point_lon:.7f}) "
             f"dist={dist_m:.1f}m base_r={base_radius} eff_r={effective_radius} "
@@ -583,7 +608,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             oc_staff_id,
             session.selected_point_id,
             attempt + 1,
-            config.GATE_MAX_ATTEMPTS,
+            1,
             lat,
             lon,
             point_lat_raw,
@@ -605,7 +630,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         if dist_m > effective_radius:
             session.last_status = STATUS_OUT
             session.gate_last_reason = "distance"
-            session.gate_attempt = min(session.gate_attempt + 1, config.GATE_MAX_ATTEMPTS)
+            session.gate_attempt = 1
             out_reason = "distance"
             if accuracy is not None and accuracy > config.ACCURACY_MAX_M:
                 out_reason = "distance_with_poor_accuracy"
@@ -631,19 +656,11 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             if accuracy is None:
                 details += acc_missing_note
 
-            if session.gate_attempt < config.GATE_MAX_ATTEMPTS:
-                await status_message.edit_text(
-                    "Мы не видим вас в рабочем радиусе: "
-                    f"≈{dist_m:.0f} м, допустимо сейчас {effective_radius:.0f} м (попытка {session.gate_attempt}/{config.GATE_MAX_ATTEMPTS}).\n"
-                    "Подойдите ближе к точке и отправьте локацию ещё раз.\n\n"
-                    f"{details}",
-                    reply_markup=retry_inline_keyboard(),
-                )
-                return
-
             await status_message.edit_text(
-                f"Мы не видим вас в рабочем радиусе после нескольких попыток.\n"
-                "Проверьте точку и отправьте геопозицию ещё раз.\n\n"
+                "Мы вас не видим в рабочей зоне, до этой зоны не хватает примерно "
+                f"{max(dist_m - effective_radius, 0):.0f} м.\n\n"
+                "Если вы выбрали не ту точку — просто выберите снова. "
+                "Но если вы в рабочей зоне и считаете, что это ошибка — сообщите руководителю вашей точки, чтобы поставить смену.\n\n"
                 f"{details}",
                 reply_markup=retry_inline_keyboard(include_issue=True),
             )
@@ -785,7 +802,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         success_message += "Смена начата. Удачной работы!"
 
         await status_message.edit_text(success_message)
-        await message.reply_text("Главное меню снова доступно ниже.", reply_markup=main_menu_keyboard())
+        await source_message.reply_text("Главное меню снова доступно ниже.", reply_markup=main_menu_keyboard())
 
         # Task 3: Companion notifications
         try:
@@ -805,13 +822,13 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
                 ]
 
                 if not colleagues:
-                    await message.reply_text("✅ Смена начата! Удачи в работе!")
+                    await source_message.reply_text("✅ Смена начата! Удачи в работе!")
                 else:
                     names = ", ".join(
                         s.get("full_name") or s.get("staff_name") or f"сотрудник #{s.get('staff_id', '?')}"
                         for s in colleagues
                     )
-                    await message.reply_text(f"👥 На точке уже работают: {names}")
+                    await source_message.reply_text(f"👥 На точке уже работают: {names}")
                     for colleague in colleagues:
                         colleague_chat_id = colleague.get("telegram_chat_id")
                         if not colleague_chat_id:
@@ -830,7 +847,49 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         except Exception as exc:
             logger.warning("COMPANION_NOTIFY_FAILED error=%s", exc)
 
+    async def recheck_location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query = update.callback_query
+        user = update.effective_user
+        chat = update.effective_chat
+        if not query or not user or not chat or not query.message:
+            return
+        await query.answer()
+
+        session = session_store.get_or_create(user.id, chat.id)
+        if session.mode != MODE_AWAITING_LOCATION:
+            await query.message.reply_text("Сначала начните запуск смены и выберите точку.")
+            return
+
+        lat = session.last_lat
+        lon = session.last_lon
+        acc = session.last_acc
+        if lat is None or lon is None:
+            await query.message.reply_text(
+                "Не нашли активную трансляцию геопозиции. Отправьте трансляцию и нажмите «Проверить повторно».",
+                reply_markup=retry_inline_keyboard(include_issue=True),
+            )
+            return
+
+        staff = await oc_client.get_staff_by_telegram(user.id)
+        if not staff:
+            await query.message.reply_text("Не удалось найти сотрудника. Обратитесь к администратору.")
+            return
+
+        status_message = await query.message.reply_text("⏳ Проверяем геопозицию из последней трансляции...")
+        await process_geo_gate_check(
+            context=context,
+            session=session,
+            staff=staff,
+            status_message=status_message,
+            source_message=query.message,
+            user_id=user.id,
+            lat=lat,
+            lon=lon,
+            accuracy=acc,
+        )
+
     return [
         MessageHandler(filters.UpdateType.MESSAGE & filters.LOCATION, handle_location_message),
         MessageHandler(filters.UpdateType.EDITED_MESSAGE & filters.LOCATION, handle_location_message),
+        CallbackQueryHandler(recheck_location_callback, pattern=r"^recheck_location$"),
     ]
