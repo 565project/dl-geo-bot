@@ -47,6 +47,7 @@ class ShiftSession:
     last_admin_alert_at: float = 0.0
     last_out_violation_notified_round: int = 0
     last_unknown_warn_ts: float = 0.0
+    stale_first_detected_ts: float = 0.0
 
     # legacy/runtime геополей для статуса и фоновых задач
     last_ping_ts: float = 0.0
