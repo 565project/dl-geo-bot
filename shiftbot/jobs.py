@@ -148,11 +148,21 @@ def build_job_check_stale(session_store, oc_client, logger):
                 session.out_streak = 0
                 logger.info("STALE user=%s age=%.1f -> UNKNOWN", session.user_id, age)
 
+                warn_round = int(getattr(session, "last_out_violation_notified_round", 0) or 0)
+                is_second_or_more = warn_round >= 1
+                session.last_out_violation_notified_round = warn_round + 1
+
+                staff_warning_text = "⚠️ Мы вас не видим. Пожалуйста, включите трансляцию геопозиции."
+                if is_second_or_more:
+                    staff_warning_text += (
+                        "\n\nПосле второго уведомления смена закроется автоматически, "
+                        "а администратор проведет проверку. "
+                        "Если это ошибка, смену восстановят без потери рабочего времени."
+                    )
+
                 await context.bot.send_message(
                     chat_id=session.chat_id,
-                    text=(
-                        "⚠️ Мы вас не видим. Пожалуйста, включите трансляцию геопозиции."
-                    ),
+                    text=staff_warning_text,
                 )
                 stale_admin_text = (
                     f"⏰ Нет обновлений геолокации\n"
@@ -218,16 +228,16 @@ def build_job_check_stale(session_store, oc_client, logger):
 
                 if decisions.get("admin_notify"):
                     shift_id = session.active_shift_id
-                    staff_id = getattr(session, "staff_id", session.user_id)
+                    staff_name = getattr(session, "active_staff_name", None) or f"{session.user_id}"
                     point_id = getattr(session, "point_id", session.active_point_id)
+                    staff_phone = getattr(session, "active_staff_phone", None) or "не указан"
 
                     admin_text = (
                         f"⚠️ ПОДОЗРЕНИЕ (2-й раунд)\n\n"
-                        f"Смена: {shift_id}\n"
-                        f"Сотрудник: {staff_id}\n"
-                        f"Точка: {point_id}\n\n"
-                        "Сотрудник не виден (нет обновлений геолокации).\n"
-                        "Требуется ручная проверка на сайте."
+                        f"Сотрудник {staff_name} пропал с радаров на точке {point_id}.\n"
+                        f"Телефон сотрудника: {staff_phone}\n\n"
+                        "Требуется ручная проверка по камерам. "
+                        "Заявка на подозрение отправлена на сайт для рассмотрения."
                     )
 
                     await notify_admins(
