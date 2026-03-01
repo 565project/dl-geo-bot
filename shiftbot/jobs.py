@@ -148,21 +148,100 @@ def build_job_check_stale(session_store, oc_client, logger):
                 session.out_streak = 0
                 logger.info("STALE user=%s age=%.1f -> UNKNOWN", session.user_id, age)
 
-                await context.bot.send_message(
-                    chat_id=session.chat_id,
-                    text=(
-                        "⚠️ Мы вас не видим. Пожалуйста, включите трансляцию геопозиции."
-                    ),
-                )
-                stale_admin_text = (
-                    f"⏰ Нет обновлений геолокации\n"
-                    f"shift_id: {session.active_shift_id or '—'}\n"
-                    f"staff: {getattr(session, 'active_staff_name', None) or session.user_id}\n"
-                    f"point_id: {session.active_point_id or '—'}\n"
-                    f"last_seen: {round(age, 0):.0f}s назад"
-                )
-                logger.info("STALE_WARN_SUPPRESSED text=%s", stale_admin_text.replace("\n", " | "))
+                warn_round = int(getattr(session, "last_out_violation_notified_round", 0) or 0)
+                next_round = warn_round + 1
+                session.last_out_violation_notified_round = next_round
 
+                if next_round == 1:
+                    session.stale_first_detected_ts = now
+                    staff_warning_text = (
+                        "⚠️ Мы вас не видим. Пожалуйста, включите трансляцию геопозиции."
+                        "\n\nПосле второго уведомления смена закроется автоматически, "
+                        "а администратор проведет проверку. "
+                        "Если это ошибка, смену восстановят без потери рабочего времени."
+                    )
+                    await context.bot.send_message(
+                        chat_id=session.chat_id,
+                        text=staff_warning_text,
+                    )
+                    continue
+
+                shift_id_to_stop = session.active_shift_id
+                staff_name = getattr(session, "active_staff_name", None) or f"{session.user_id}"
+                point_label = getattr(session, "active_point_name", None) or (
+                    f"id={getattr(session, 'active_point_id', None)}"
+                    if getattr(session, "active_point_id", None) is not None
+                    else "—"
+                )
+                staff_phone = getattr(session, "active_staff_phone", None) or "не указан"
+                admin_text = (
+                    f"Сотрудник {staff_name} пропал с радаров на точке {point_label}.\n"
+                    f"Телефон сотрудника: {staff_phone}\n\n"
+                    "Требуется ручная проверка по камерам. "
+                    "Заявка на подозрение отправлена на сайт для рассмотрения."
+                )
+                await notify_admins(
+                    context,
+                    admin_text,
+                    shift_id=shift_id_to_stop,
+                    cooldown_key="admin_notify_stale",
+                )
+
+                end_at_ts = int(getattr(session, "stale_first_detected_ts", 0.0) or now)
+
+                auto_stopped = False
+                stop_result = None
+                try:
+                    stop_result = await oc_client.shift_end(
+                        {
+                            "shift_id": shift_id_to_stop,
+                            "end_reason": "auto_stale_no_geo_second_notice",
+                            "end_at": end_at_ts,
+                        }
+                    )
+                    auto_stopped = not (stop_result.get("ok") is False and stop_result.get("error"))
+                except Exception as exc:
+                    logger.error(
+                        "AUTO_STOP_STALE_SHIFT_FAILED shift_id=%s error=%s",
+                        shift_id_to_stop,
+                        exc,
+                    )
+
+                if auto_stopped:
+                    # Verify on server that shift is truly closed.
+                    session.last_active_shift_refresh_ts = 0.0
+                    await _refresh_active_shift_if_needed(session, now)
+                    auto_stopped = not bool(session.active_shift_id)
+
+                logger.info(
+                    "AUTO_STOP_STALE_SHIFT shift_id=%s round=%s auto_stopped=%s result=%s end_at=%s",
+                    shift_id_to_stop,
+                    next_round,
+                    auto_stopped,
+                    stop_result,
+                    end_at_ts,
+                )
+
+                if auto_stopped:
+                    _stop_monitoring_session(session)
+                    try:
+                        await context.bot.send_message(
+                            chat_id=session.chat_id,
+                            text=(
+                                "🔴 Смена закрыта автоматически после повторной потери геопозиции.\n"
+                                "Администратор проведет проверку. Если это ошибка — смену восстановят "
+                                "без потери рабочего времени."
+                            ),
+                        )
+                    except Exception as exc:
+                        logger.error("AUTO_STOP_STALE_NOTIFY_FAIL chat_id=%s error=%s", session.chat_id, exc)
+                    continue
+
+                logger.warning(
+                    "AUTO_STOP_STALE_SHIFT_NOT_CONFIRMED shift_id=%s result=%s",
+                    shift_id_to_stop,
+                    stop_result,
+                )
                 logger.info(
                     "VIOLATION_TICK_PRECHECK user=%s shift_id=%s last_ping_ts=%s last_live_update_ts=%s mode=%s active=%s",
                     session.user_id,
@@ -218,16 +297,19 @@ def build_job_check_stale(session_store, oc_client, logger):
 
                 if decisions.get("admin_notify"):
                     shift_id = session.active_shift_id
-                    staff_id = getattr(session, "staff_id", session.user_id)
-                    point_id = getattr(session, "point_id", session.active_point_id)
+                    staff_name = getattr(session, "active_staff_name", None) or f"{session.user_id}"
+                    point_label = getattr(session, "active_point_name", None) or (
+                        f"id={getattr(session, 'active_point_id', None)}"
+                        if getattr(session, "active_point_id", None) is not None
+                        else "—"
+                    )
+                    staff_phone = getattr(session, "active_staff_phone", None) or "не указан"
 
                     admin_text = (
-                        f"⚠️ ПОДОЗРЕНИЕ (2-й раунд)\n\n"
-                        f"Смена: {shift_id}\n"
-                        f"Сотрудник: {staff_id}\n"
-                        f"Точка: {point_id}\n\n"
-                        "Сотрудник не виден (нет обновлений геолокации).\n"
-                        "Требуется ручная проверка на сайте."
+                        f"Сотрудник {staff_name} пропал с радаров на точке {point_label}.\n"
+                        f"Телефон сотрудника: {staff_phone}\n\n"
+                        "Требуется ручная проверка по камерам. "
+                        "Заявка на подозрение отправлена на сайт для рассмотрения."
                     )
 
                     await notify_admins(
