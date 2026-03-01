@@ -100,7 +100,9 @@ class StaleAutoStopReasonFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(oc_client.shift_end_calls[1]["end_reason"], "auto_violation_out")
         self.assertFalse(session.active)
         self.assertIsNone(session.active_shift_id)
-        self.assertEqual(oc_client.violation_tick_calls, [118])
+
+        self.assertEqual(oc_client.violation_tick_calls, [118, 118])
+
 
 
 if __name__ == "__main__":

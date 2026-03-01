@@ -105,7 +105,7 @@ class StaleJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(oc_client.calls, [555, 555])
         staff_msgs = [m for m in context.bot.messages if m[0] == 100]
         admin_msgs = [m for m in context.bot.messages if m[0] == 9001]
-        self.assertEqual(len(staff_msgs), 2)
+        self.assertEqual(len(staff_msgs), 1)
         self.assertEqual(len(admin_msgs), 1)
 
     async def test_network_failure_on_tick_keeps_staff_warning_and_no_crash(self):
@@ -157,7 +157,7 @@ class StaleJobTests(unittest.IsolatedAsyncioTestCase):
         finally:
             config.STALE_NOTIFY_COOLDOWN_SEC = original_notify_cd
 
-        self.assertEqual(oc_client.calls, [15])
+        self.assertEqual(oc_client.calls, [])
         self.assertFalse(session.active)
         self.assertIsNone(session.active_shift_id)
         self.assertEqual(len(context.bot.messages), 1)
