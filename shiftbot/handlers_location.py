@@ -823,7 +823,13 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
 
         success_message = "✅ Вы в рабочей зоне. Смена начата. Удачной работы!"
 
-        await status_message.edit_text(success_message, reply_markup=main_menu_keyboard())
+        await status_message.edit_text(success_message)
+        try:
+            await status_message.delete()
+        except Exception:
+            pass
+        await source_message.reply_text(success_message, reply_markup=main_menu_keyboard())
+
 
         # Task 3: Companion notifications
         try:
