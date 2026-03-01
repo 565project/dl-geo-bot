@@ -502,8 +502,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
         else:
             logger.info("LOCATION_UPDATE no active shift staff_id=%s", oc_staff_id)
 
-        if session.mode != MODE_AWAITING_LOCATION:
-            return
+
 
         should_run_geo_gate_check = (not update.edited_message) or session.gate_attempt == 0
         if not should_run_geo_gate_check:
@@ -522,6 +521,7 @@ def build_location_handlers(session_store, staff_service, oc_client, dead_soul_d
             lon=lon,
             accuracy=acc,
         )
+
 
     async def process_geo_gate_check(
         *,
