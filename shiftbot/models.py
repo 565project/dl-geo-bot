@@ -40,12 +40,14 @@ class ShiftSession:
     active_point_radius: Optional[float] = None
     active_role: Optional[str] = None
     active_staff_name: Optional[str] = None
+    active_staff_phone: Optional[str] = None
     active_started_at: Optional[str] = None
     consecutive_out_count: int = 0
     last_out_warn_at: float = 0.0
     last_admin_alert_at: float = 0.0
     last_out_violation_notified_round: int = 0
     last_unknown_warn_ts: float = 0.0
+    stale_first_detected_ts: float = 0.0
 
     # legacy/runtime геополей для статуса и фоновых задач
     last_ping_ts: float = 0.0

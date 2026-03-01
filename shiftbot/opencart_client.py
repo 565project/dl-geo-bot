@@ -254,6 +254,8 @@ class OpenCartClient:
             "shift_id": str(payload.get("shift_id")),
             "end_reason": str(payload.get("end_reason") or payload.get("reason") or "manual"),
         }
+        if payload.get("end_at") is not None:
+            clean_payload["end_at"] = str(payload.get("end_at"))
         data = await self._request(
             "POST",
             params={"route": "dl/geo_api/shift_end"},
